@@ -136,12 +136,42 @@ export class Order extends VendureEntity implements ChannelAware, HasCustomField
         return [...groupedAdjustments.values()];
     }
 
-    @Calculated({ expression: 'subTotal + shipping' })
+    @Calculated({
+        query: qb =>
+            qb
+                .leftJoin(
+                    qb1 => {
+                        return qb1
+                            .from(Order, 'order')
+                            .select('order.shipping + order.subTotal', 'total')
+                            .addSelect('order.id', 'oid');
+                    },
+                    't1',
+                    't1.oid = order.id',
+                )
+                .addSelect('t1.total', 'total'),
+        expression: 'total',
+    })
     get total(): number {
         return this.subTotal + (this.shipping || 0);
     }
 
-    @Calculated({ expression: 'subTotalWithTax + shippingWithTax' })
+    @Calculated({
+        query: qb =>
+            qb
+                .leftJoin(
+                    qb1 => {
+                        return qb1
+                            .from(Order, 'order')
+                            .select('order.shippingWithTax + order.subTotalWithTax', 'twt')
+                            .addSelect('order.id', 'oid');
+                    },
+                    't1',
+                    't1.oid = order.id',
+                )
+                .addSelect('t1.twt', 'twt'),
+        expression: 'twt',
+    })
     get totalWithTax(): number {
         return this.subTotalWithTax + (this.shippingWithTax || 0);
     }
@@ -160,9 +190,9 @@ export class Order extends VendureEntity implements ChannelAware, HasCustomField
                 },
                 't1',
                 't1.oid = order.id',
-            );
+            ).addSelect('t1.qty', 'qty');
         },
-        expression: 't1.qty',
+        expression: 'qty',
     })
     get totalQuantity(): number {
         return summate(this.lines, 'quantity');

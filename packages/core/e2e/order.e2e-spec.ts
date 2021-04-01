@@ -5,6 +5,7 @@ import {
     defaultShippingCalculator,
     defaultShippingEligibilityChecker,
     manualFulfillmentHandler,
+    mergeConfig,
 } from '@vendure/core';
 import {
     createErrorResultGuard,
@@ -16,7 +17,7 @@ import gql from 'graphql-tag';
 import path from 'path';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
 import {
     failsToSettlePaymentMethod,
@@ -82,9 +83,9 @@ import {
     DELETE_SHIPPING_METHOD,
     GET_CUSTOMER_LIST,
     GET_ORDER,
-    GET_ORDERS_LIST,
     GET_ORDER_FULFILLMENTS,
     GET_ORDER_HISTORY,
+    GET_ORDERS_LIST,
     GET_PRODUCT_WITH_VARIANTS,
     GET_STOCK_MOVEMENT,
     SETTLE_PAYMENT,
@@ -104,17 +105,18 @@ import { assertThrowsWithMessage } from './utils/assert-throws-with-message';
 import { addPaymentToOrder, proceedToArrangingPayment, sortById } from './utils/test-order-utils';
 
 describe('Orders resolver', () => {
-    const { server, adminClient, shopClient } = createTestEnvironment({
-        ...testConfig,
-        paymentOptions: {
-            paymentMethodHandlers: [
-                twoStagePaymentMethod,
-                failsToSettlePaymentMethod,
-                singleStageRefundablePaymentMethod,
-                partialPaymentMethod,
-            ],
-        },
-    });
+    const { server, adminClient, shopClient } = createTestEnvironment(
+        mergeConfig(testConfig, {
+            paymentOptions: {
+                paymentMethodHandlers: [
+                    twoStagePaymentMethod,
+                    failsToSettlePaymentMethod,
+                    singleStageRefundablePaymentMethod,
+                    partialPaymentMethod,
+                ],
+            },
+        }),
+    );
     let customers: GetCustomerList.Items[];
     const password = 'test';
 
@@ -227,6 +229,7 @@ describe('Orders resolver', () => {
                         sort: {
                             total: SortOrder.DESC,
                         },
+                        take: 10,
                     },
                 },
             );
@@ -236,19 +239,21 @@ describe('Orders resolver', () => {
             ]);
         });
 
-        it('filter by totalWithTax', async () => {
+        it('sort by totalWithTax', async () => {
             const result = await adminClient.query<GetOrderList.Query, GetOrderList.Variables>(
                 GET_ORDERS_LIST,
                 {
                     options: {
-                        filter: {
-                            totalWithTax: { gt: 323760 },
+                        sort: {
+                            totalWithTax: SortOrder.DESC,
                         },
+                        take: 10,
                     },
                 },
             );
             expect(result.orders.items.map(o => pick(o, ['id', 'totalWithTax']))).toEqual([
                 { id: 'T_2', totalWithTax: 959520 },
+                { id: 'T_1', totalWithTax: 323760 },
             ]);
         });
 
@@ -260,12 +265,47 @@ describe('Orders resolver', () => {
                         sort: {
                             totalQuantity: SortOrder.DESC,
                         },
+                        take: 10,
                     },
                 },
             );
             expect(result.orders.items.map(o => pick(o, ['id', 'totalQuantity']))).toEqual([
                 { id: 'T_2', totalQuantity: 4 },
                 { id: 'T_1', totalQuantity: 2 },
+            ]);
+        });
+
+        it('filter by total', async () => {
+            const result = await adminClient.query<GetOrderList.Query, GetOrderList.Variables>(
+                GET_ORDERS_LIST,
+                {
+                    options: {
+                        filter: {
+                            total: { gt: 323760 },
+                        },
+                        take: 10,
+                    },
+                },
+            );
+            expect(result.orders.items.map(o => pick(o, ['id', 'total']))).toEqual([
+                { id: 'T_2', total: 799600 },
+            ]);
+        });
+
+        it('filter by totalWithTax', async () => {
+            const result = await adminClient.query<GetOrderList.Query, GetOrderList.Variables>(
+                GET_ORDERS_LIST,
+                {
+                    options: {
+                        filter: {
+                            totalWithTax: { gt: 323760 },
+                        },
+                        take: 10,
+                    },
+                },
+            );
+            expect(result.orders.items.map(o => pick(o, ['id', 'totalWithTax']))).toEqual([
+                { id: 'T_2', totalWithTax: 959520 },
             ]);
         });
 
