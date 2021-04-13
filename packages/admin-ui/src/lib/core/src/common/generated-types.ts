@@ -63,7 +63,7 @@ export type Query = {
   productOptionGroups: Array<ProductOptionGroup>;
   /** Get a ProductVariant by id */
   productVariant?: Maybe<ProductVariant>;
-  /** List ProductVariants */
+  /** List ProductVariants either all or for the specific product. */
   productVariants: ProductVariantList;
   /** List Products */
   products: ProductList;
@@ -227,6 +227,7 @@ export type QueryProductVariantArgs = {
 
 export type QueryProductVariantsArgs = {
   options?: Maybe<ProductVariantListOptions>;
+  productId?: Maybe<Scalars['ID']>;
 };
 
 
@@ -408,6 +409,8 @@ export type Mutation = {
   /** Delete one or more FacetValues */
   deleteFacetValues: Array<DeletionResponse>;
   deleteOrderNote: DeletionResponse;
+  /** Delete a PaymentMethod */
+  deletePaymentMethod: DeletionResponse;
   /** Delete a Product */
   deleteProduct: DeletionResponse;
   /** Delete a ProductVariant */
@@ -773,6 +776,12 @@ export type MutationDeleteFacetValuesArgs = {
 
 export type MutationDeleteOrderNoteArgs = {
   id: Scalars['ID'];
+};
+
+
+export type MutationDeletePaymentMethodArgs = {
+  id: Scalars['ID'];
+  force?: Maybe<Scalars['Boolean']>;
 };
 
 
@@ -1677,6 +1686,41 @@ export type OrderModification = Node & {
   payment?: Maybe<Payment>;
   refund?: Maybe<Refund>;
   isSettled: Scalars['Boolean'];
+};
+
+export type OrderFilterParameter = {
+  createdAt?: Maybe<DateOperators>;
+  updatedAt?: Maybe<DateOperators>;
+  orderPlacedAt?: Maybe<DateOperators>;
+  code?: Maybe<StringOperators>;
+  state?: Maybe<StringOperators>;
+  active?: Maybe<BooleanOperators>;
+  totalQuantity?: Maybe<NumberOperators>;
+  subTotal?: Maybe<NumberOperators>;
+  subTotalWithTax?: Maybe<NumberOperators>;
+  currencyCode?: Maybe<StringOperators>;
+  shipping?: Maybe<NumberOperators>;
+  shippingWithTax?: Maybe<NumberOperators>;
+  total?: Maybe<NumberOperators>;
+  totalWithTax?: Maybe<NumberOperators>;
+  customerLastName?: Maybe<StringOperators>;
+};
+
+export type OrderSortParameter = {
+  id?: Maybe<SortOrder>;
+  createdAt?: Maybe<SortOrder>;
+  updatedAt?: Maybe<SortOrder>;
+  orderPlacedAt?: Maybe<SortOrder>;
+  code?: Maybe<SortOrder>;
+  state?: Maybe<SortOrder>;
+  totalQuantity?: Maybe<SortOrder>;
+  subTotal?: Maybe<SortOrder>;
+  subTotalWithTax?: Maybe<SortOrder>;
+  shipping?: Maybe<SortOrder>;
+  shippingWithTax?: Maybe<SortOrder>;
+  total?: Maybe<SortOrder>;
+  totalWithTax?: Maybe<SortOrder>;
+  customerLastName?: Maybe<SortOrder>;
 };
 
 export type UpdateOrderInput = {
@@ -2936,10 +2980,24 @@ export type DateOperators = {
   between?: Maybe<DateRange>;
 };
 
+/**
+ * Used to construct boolean expressions for filtering search results
+ * by FacetValue ID. Examples:
+ *
+ * * ID=1 OR ID=2: `{ facetValueFilters: [{ or: [1,2] }] }`
+ * * ID=1 AND ID=2: `{ facetValueFilters: [{ and: 1 }, { and: 2 }] }`
+ * * ID=1 AND (ID=2 OR ID=3): `{ facetValueFilters: [{ and: 1 }, { or: [2,3] }] }`
+ */
+export type FacetValueFilterInput = {
+  and?: Maybe<Scalars['ID']>;
+  or?: Maybe<Array<Scalars['ID']>>;
+};
+
 export type SearchInput = {
   term?: Maybe<Scalars['String']>;
   facetValueIds?: Maybe<Array<Scalars['ID']>>;
   facetValueOperator?: Maybe<LogicalOperator>;
+  facetValueFilters?: Maybe<Array<FacetValueFilterInput>>;
   collectionId?: Maybe<Scalars['ID']>;
   collectionSlug?: Maybe<Scalars['String']>;
   groupByProduct?: Maybe<Scalars['Boolean']>;
@@ -3015,6 +3073,8 @@ export type PaymentMethodQuote = {
   __typename?: 'PaymentMethodQuote';
   id: Scalars['ID'];
   code: Scalars['String'];
+  name: Scalars['String'];
+  description: Scalars['String'];
   isEligible: Scalars['Boolean'];
   eligibilityMessage?: Maybe<Scalars['String']>;
 };
@@ -4063,7 +4123,7 @@ export type OrderLine = Node & {
   discounts: Array<Discount>;
   taxLines: Array<TaxLine>;
   order: Order;
-  customFields?: Maybe<Scalars['JSON']>;
+  customFields?: Maybe<OrderLineCustomFields>;
 };
 
 export type Refund = Node & {
@@ -4626,39 +4686,6 @@ export type JobSortParameter = {
   duration?: Maybe<SortOrder>;
 };
 
-export type OrderFilterParameter = {
-  createdAt?: Maybe<DateOperators>;
-  updatedAt?: Maybe<DateOperators>;
-  orderPlacedAt?: Maybe<DateOperators>;
-  code?: Maybe<StringOperators>;
-  state?: Maybe<StringOperators>;
-  active?: Maybe<BooleanOperators>;
-  totalQuantity?: Maybe<NumberOperators>;
-  subTotal?: Maybe<NumberOperators>;
-  subTotalWithTax?: Maybe<NumberOperators>;
-  currencyCode?: Maybe<StringOperators>;
-  shipping?: Maybe<NumberOperators>;
-  shippingWithTax?: Maybe<NumberOperators>;
-  total?: Maybe<NumberOperators>;
-  totalWithTax?: Maybe<NumberOperators>;
-};
-
-export type OrderSortParameter = {
-  id?: Maybe<SortOrder>;
-  createdAt?: Maybe<SortOrder>;
-  updatedAt?: Maybe<SortOrder>;
-  orderPlacedAt?: Maybe<SortOrder>;
-  code?: Maybe<SortOrder>;
-  state?: Maybe<SortOrder>;
-  totalQuantity?: Maybe<SortOrder>;
-  subTotal?: Maybe<SortOrder>;
-  subTotalWithTax?: Maybe<SortOrder>;
-  shipping?: Maybe<SortOrder>;
-  shippingWithTax?: Maybe<SortOrder>;
-  total?: Maybe<SortOrder>;
-  totalWithTax?: Maybe<SortOrder>;
-};
-
 export type PaymentMethodFilterParameter = {
   createdAt?: Maybe<DateOperators>;
   updatedAt?: Maybe<DateOperators>;
@@ -4826,6 +4853,15 @@ export type HistoryEntrySortParameter = {
   id?: Maybe<SortOrder>;
   createdAt?: Maybe<SortOrder>;
   updatedAt?: Maybe<SortOrder>;
+};
+
+export type OrderLineCustomFields = {
+  __typename?: 'OrderLineCustomFields';
+  giftCardValue?: Maybe<Scalars['Int']>;
+  giftCardRecipientName?: Maybe<Scalars['String']>;
+  giftCardRecipientEmailAddress?: Maybe<Scalars['String']>;
+  giftCardMessage?: Maybe<Scalars['String']>;
+  giftCardDeliveryDate?: Maybe<Scalars['DateTime']>;
 };
 
 export type AuthenticationInput = {
@@ -5790,7 +5826,7 @@ export type OrderDetailFragment = (
     & OrderAddressFragment
   )>, payments?: Maybe<Array<(
     { __typename?: 'Payment' }
-    & Pick<Payment, 'id' | 'createdAt' | 'transactionId' | 'amount' | 'method' | 'state' | 'nextStates' | 'metadata'>
+    & Pick<Payment, 'id' | 'createdAt' | 'transactionId' | 'amount' | 'method' | 'state' | 'nextStates' | 'errorMessage' | 'metadata'>
     & { refunds: Array<(
       { __typename?: 'Refund' }
       & Pick<Refund, 'id' | 'createdAt' | 'state' | 'items' | 'adjustment' | 'total' | 'paymentId' | 'reason' | 'transactionId' | 'method' | 'metadata'>
@@ -7280,6 +7316,17 @@ export type UpdatePaymentMethodMutationVariables = Exact<{
 export type UpdatePaymentMethodMutation = { updatePaymentMethod: (
     { __typename?: 'PaymentMethod' }
     & PaymentMethodFragment
+  ) };
+
+export type DeletePaymentMethodMutationVariables = Exact<{
+  id: Scalars['ID'];
+  force?: Maybe<Scalars['Boolean']>;
+}>;
+
+
+export type DeletePaymentMethodMutation = { deletePaymentMethod: (
+    { __typename?: 'DeletionResponse' }
+    & Pick<DeletionResponse, 'result' | 'message'>
   ) };
 
 export type GlobalSettingsFragment = (
@@ -9466,6 +9513,12 @@ export namespace UpdatePaymentMethod {
   export type Variables = UpdatePaymentMethodMutationVariables;
   export type Mutation = UpdatePaymentMethodMutation;
   export type UpdatePaymentMethod = (NonNullable<UpdatePaymentMethodMutation['updatePaymentMethod']>);
+}
+
+export namespace DeletePaymentMethod {
+  export type Variables = DeletePaymentMethodMutationVariables;
+  export type Mutation = DeletePaymentMethodMutation;
+  export type DeletePaymentMethod = (NonNullable<DeletePaymentMethodMutation['deletePaymentMethod']>);
 }
 
 export namespace GlobalSettings {

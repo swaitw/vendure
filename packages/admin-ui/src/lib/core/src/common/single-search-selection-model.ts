@@ -4,7 +4,7 @@ import { NgOption, SelectionModel } from '@ng-select/ng-select';
  * A custom SelectionModel for the NgSelect component which only allows a single
  * search term at a time.
  */
-export class ProductSearchSelectionModel implements SelectionModel {
+export class SingleSearchSelectionModel implements SelectionModel {
     private _selected: NgOption[] = [];
 
     get value(): NgOption[] {
@@ -51,6 +51,6 @@ export class ProductSearchSelectionModel implements SelectionModel {
     }
 }
 
-export function ProductSearchSelectionModelFactory() {
-    return new ProductSearchSelectionModel();
+export function SingleSearchSelectionModelFactory() {
+    return new SingleSearchSelectionModel();
 }

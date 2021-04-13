@@ -8,6 +8,16 @@ describe('InMemoryJobQueueStrategy', () => {
     let strategy: InMemoryJobQueueStrategy;
     beforeEach(() => {
         strategy = new InMemoryJobQueueStrategy();
+        // init with mock injector & ProcessContext
+        strategy.init({
+            get() {
+                return { isWorker: false };
+            },
+        } as any);
+    });
+
+    afterEach(async () => {
+        await strategy.destroy();
     });
 
     describe('findMany options', () => {

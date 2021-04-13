@@ -24,6 +24,7 @@ import {
     ModifyOrderInput,
     ModifyOrderResult,
     OrderLineInput,
+    OrderListOptions,
     OrderProcessState,
     RefundOrderInput,
     RefundOrderResult,
@@ -36,6 +37,7 @@ import {
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 import { summate } from '@vendure/common/lib/shared-utils';
 import { unique } from '@vendure/common/lib/unique';
+import { FindOptionsUtils } from 'typeorm/find-options/FindOptionsUtils';
 
 import { RequestContext } from '../../api/common/request-context';
 import { ErrorResultUnion, isGraphQlErrorResult } from '../../common/error/error-result';
@@ -51,7 +53,6 @@ import {
     MultipleOrderError,
     NothingToRefundError,
     PaymentOrderMismatchError,
-    PaymentStateTransitionError,
     QuantityTooGreatError,
     RefundOrderStateError,
     SettlePaymentError,
@@ -87,7 +88,6 @@ import { Surcharge } from '../../entity/surcharge/surcharge.entity';
 import { User } from '../../entity/user/user.entity';
 import { EventBus } from '../../event-bus/event-bus';
 import { OrderStateTransitionEvent } from '../../event-bus/events/order-state-transition-event';
-import { PaymentStateTransitionEvent } from '../../event-bus/events/payment-state-transition-event';
 import { RefundStateTransitionEvent } from '../../event-bus/events/refund-state-transition-event';
 import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
 import { FulfillmentState } from '../helpers/fulfillment-state-machine/fulfillment-state';
@@ -157,9 +157,10 @@ export class OrderService {
         })) as OrderProcessState[];
     }
 
-    findAll(ctx: RequestContext, options?: ListQueryOptions<Order>): Promise<PaginatedList<Order>> {
+    findAll(ctx: RequestContext, options?: OrderListOptions): Promise<PaginatedList<Order>> {
         return this.listQueryBuilder
             .build(Order, options, {
+                ctx,
                 relations: [
                     'lines',
                     'customer',
@@ -169,7 +170,9 @@ export class OrderService {
                     'shippingLines',
                 ],
                 channelId: ctx.channelId,
-                ctx,
+                customPropertyMap: {
+                    customerLastName: 'customer.lastName',
+                },
             })
             .getManyAndCount()
             .then(([items, totalItems]) => {
@@ -181,7 +184,7 @@ export class OrderService {
     }
 
     async findOne(ctx: RequestContext, orderId: ID): Promise<Order | undefined> {
-        const order = await this.connection
+        const qb = this.connection
             .getRepository(ctx, Order)
             .createQueryBuilder('order')
             .leftJoin('order.channels', 'channel')
@@ -201,8 +204,12 @@ export class OrderService {
             .where('order.id = :orderId', { orderId })
             .andWhere('channel.id = :channelId', { channelId: ctx.channelId })
             .addOrderBy('lines.createdAt', 'ASC')
-            .addOrderBy('items.createdAt', 'ASC')
-            .getOne();
+            .addOrderBy('items.createdAt', 'ASC');
+
+        // tslint:disable-next-line:no-non-null-assertion
+        FindOptionsUtils.joinEagerRelations(qb, qb.alias, qb.expressionMap.mainAlias!.metadata);
+
+        const order = await qb.getOne();
         if (order) {
             for (const line of order.lines) {
                 line.productVariant = translateDeep(
