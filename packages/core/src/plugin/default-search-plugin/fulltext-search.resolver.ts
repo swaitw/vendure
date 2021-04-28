@@ -46,7 +46,7 @@ export class AdminFulltextSearchResolver implements BaseSearchResolver {
     constructor(private fulltextSearchService: FulltextSearchService) {}
 
     @Query()
-    @Allow(Permission.ReadCatalog)
+    @Allow(Permission.ReadCatalog, Permission.ReadProduct)
     async search(
         @Ctx() ctx: RequestContext,
         @Args() args: QuerySearchArgs,
@@ -66,7 +66,7 @@ export class AdminFulltextSearchResolver implements BaseSearchResolver {
     }
 
     @Mutation()
-    @Allow(Permission.UpdateCatalog)
+    @Allow(Permission.UpdateCatalog, Permission.UpdateProduct)
     async reindex(@Ctx() ctx: RequestContext) {
         return this.fulltextSearchService.reindex(ctx);
     }

@@ -10,6 +10,7 @@ import {
     GetZones,
     LanguageCode,
     NotificationService,
+    Permission,
     ServerConfigService,
     TaxCategory,
     TaxRate,
@@ -24,12 +25,14 @@ import { mergeMap, take } from 'rxjs/operators';
     styleUrls: ['./tax-rate-detail.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class TaxRateDetailComponent extends BaseDetailComponent<TaxRate.Fragment>
+export class TaxRateDetailComponent
+    extends BaseDetailComponent<TaxRate.Fragment>
     implements OnInit, OnDestroy {
     taxCategories$: Observable<TaxCategory.Fragment[]>;
     zones$: Observable<GetZones.Zones[]>;
     groups$: Observable<CustomerGroup[]>;
     detailForm: FormGroup;
+    readonly updatePermission = [Permission.UpdateSettings, Permission.UpdateTaxRate];
 
     constructor(
         router: Router,
