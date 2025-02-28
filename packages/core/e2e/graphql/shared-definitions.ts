@@ -137,6 +137,7 @@ export const GET_CUSTOMER_LIST = gql`
                 phoneNumber
                 user {
                     id
+                    identifier
                     verified
                 }
             }
@@ -208,6 +209,10 @@ export const ATTEMPT_LOGIN = gql`
     mutation AttemptLogin($username: String!, $password: String!, $rememberMe: Boolean) {
         login(username: $username, password: $password, rememberMe: $rememberMe) {
             ...CurrentUser
+            ... on ErrorResult {
+                errorCode
+                message
+            }
         }
     }
     ${CURRENT_USER_FRAGMENT}
@@ -512,6 +517,12 @@ export const GET_ORDER_FULFILLMENTS = gql`
                 state
                 nextStates
                 method
+                summary {
+                    orderLine {
+                        id
+                    }
+                    quantity
+                }
             }
         }
     }
@@ -714,11 +725,8 @@ export const CANCEL_ORDER = gql`
         id
         state
         lines {
+            id
             quantity
-            items {
-                id
-                cancelled
-            }
         }
     }
 `;
@@ -755,6 +763,7 @@ export const GET_PRODUCTS_WITH_VARIANT_PRICES = gql`
                     id
                     price
                     priceWithTax
+                    currencyCode
                     sku
                     facetValues {
                         id
@@ -861,20 +870,25 @@ export const GET_ASSET_FRAGMENT_FIRST = gql`
     }
 `;
 
+export const ASSET_WITH_TAGS_AND_FOCAL_POINT_FRAGMENT = gql`
+    fragment AssetWithTagsAndFocalPoint on Asset {
+        ...Asset
+        focalPoint {
+            x
+            y
+        }
+        tags {
+            id
+            value
+        }
+    }
+    ${ASSET_FRAGMENT}
+`;
+
 export const CREATE_ASSETS = gql`
     mutation CreateAssets($input: [CreateAssetInput!]!) {
         createAssets(input: $input) {
-            ...Asset
-            ... on Asset {
-                focalPoint {
-                    x
-                    y
-                }
-                tags {
-                    id
-                    value
-                }
-            }
+            ...AssetWithTagsAndFocalPoint
             ... on MimeTypeError {
                 message
                 fileName
@@ -882,7 +896,7 @@ export const CREATE_ASSETS = gql`
             }
         }
     }
-    ${ASSET_FRAGMENT}
+    ${ASSET_WITH_TAGS_AND_FOCAL_POINT_FRAGMENT}
 `;
 
 export const DELETE_SHIPPING_METHOD = gql`
@@ -949,4 +963,112 @@ export const GET_COLLECTIONS = gql`
             }
         }
     }
+`;
+
+export const TRANSITION_PAYMENT_TO_STATE = gql`
+    mutation TransitionPaymentToState($id: ID!, $state: String!) {
+        transitionPaymentToState(id: $id, state: $state) {
+            ...Payment
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+            ... on PaymentStateTransitionError {
+                transitionError
+            }
+        }
+    }
+    ${PAYMENT_FRAGMENT}
+`;
+
+export const GET_PRODUCT_VARIANT_LIST = gql`
+    query GetProductVariantList($options: ProductVariantListOptions, $productId: ID) {
+        productVariants(options: $options, productId: $productId) {
+            items {
+                id
+                name
+                sku
+                price
+                priceWithTax
+                currencyCode
+                prices {
+                    currencyCode
+                    price
+                }
+            }
+            totalItems
+        }
+    }
+`;
+
+export const DELETE_PROMOTION = gql`
+    mutation DeletePromotion($id: ID!) {
+        deletePromotion(id: $id) {
+            result
+        }
+    }
+`;
+
+export const GET_CHANNELS = gql`
+    query GetChannels {
+        channels {
+            items {
+                id
+                code
+                token
+            }
+        }
+    }
+`;
+
+export const UPDATE_ADMINISTRATOR = gql`
+    mutation UpdateAdministrator($input: UpdateAdministratorInput!) {
+        updateAdministrator(input: $input) {
+            ...Administrator
+        }
+    }
+    ${ADMINISTRATOR_FRAGMENT}
+`;
+
+export const ASSIGN_COLLECTIONS_TO_CHANNEL = gql`
+    mutation AssignCollectionsToChannel($input: AssignCollectionsToChannelInput!) {
+        assignCollectionsToChannel(input: $input) {
+            ...Collection
+        }
+    }
+    ${COLLECTION_FRAGMENT}
+`;
+
+export const GET_COLLECTION = gql`
+    query GetCollection($id: ID, $slug: String, $variantListOptions: ProductVariantListOptions) {
+        collection(id: $id, slug: $slug) {
+            ...Collection
+            productVariants(options: $variantListOptions) {
+                items {
+                    id
+                    name
+                    price
+                }
+            }
+        }
+    }
+    ${COLLECTION_FRAGMENT}
+`;
+
+export const GET_FACET_WITH_VALUES = gql`
+    query GetFacetWithValues($id: ID!) {
+        facet(id: $id) {
+            ...FacetWithValues
+        }
+    }
+    ${FACET_WITH_VALUES_FRAGMENT}
+`;
+
+export const GET_PROMOTION = gql`
+    query GetPromotion($id: ID!) {
+        promotion(id: $id) {
+            ...Promotion
+        }
+    }
+    ${PROMOTION_FRAGMENT}
 `;

@@ -2,8 +2,8 @@ import { ID } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../../api/common/request-context';
 import { InjectableStrategy } from '../../common/types/injectable-strategy';
-import { OrderLine } from '../../entity/order-line/order-line.entity';
 import { Order } from '../../entity/order/order.entity';
+import { OrderLine } from '../../entity/order-line/order-line.entity';
 
 /**
  * @description
@@ -33,6 +33,13 @@ export function toMergedOrderLine(line: OrderLine): MergedOrderLine {
  *
  * Somehow these differing OrderLines need to be reconciled into a single collection
  * of OrderLines. The OrderMergeStrategy defines the rules governing this reconciliation.
+ *
+ * :::info
+ *
+ * This is configured via the `orderOptions.mergeStrategy` property of
+ * your VendureConfig.
+ *
+ * :::
  *
  * @docsCategory orders
  * @docsPage OrderMergeStrategy

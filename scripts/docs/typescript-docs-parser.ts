@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import ts, { HeritageClause, JSDocTag, SyntaxKind } from 'typescript';
+import ts, { HeritageClause, JSDocTag, Modifier, NodeArray, SyntaxKind } from 'typescript';
 
 import { notNullOrUndefined } from '../../packages/common/src/shared-utils';
 
+import { normalizeForUrlPart } from './docgen-utils';
 import {
     DocsPage,
     MemberInfo,
@@ -20,6 +21,7 @@ import {
  */
 export class TypescriptDocsParser {
     private readonly atTokenPlaceholder = '__EscapedAtToken__';
+    private readonly commentBlockEndTokenPlaceholder = '__EscapedCommentBlockEndToken__';
 
     /**
      * Parses the TypeScript files given by the filePaths array and returns the
@@ -29,7 +31,7 @@ export class TypescriptDocsParser {
         const sourceFiles = filePaths.map(filePath => {
             return ts.createSourceFile(
                 filePath,
-                this.replaceEscapedAtTokens(fs.readFileSync(filePath).toString()),
+                this.replaceEscapedTokens(fs.readFileSync(filePath).toString()),
                 ts.ScriptTarget.ES2015,
                 true,
             );
@@ -53,11 +55,12 @@ export class TypescriptDocsParser {
                 if (existingPage) {
                     existingPage.declarations.push(declaration);
                 } else {
-                    const normalizedTitle = this.kebabCase(pageTitle);
-                    const fileName = normalizedTitle === declaration.category ? '_index' : normalizedTitle;
+                    const normalizedTitle = normalizeForUrlPart(pageTitle);
+                    const categoryLastPart = declaration.category.split('/').pop();
+                    const fileName = normalizedTitle === categoryLastPart ? 'index' : normalizedTitle;
                     pages.set(pageTitle, {
                         title: pageTitle,
-                        category: declaration.category,
+                        category: declaration.category.split('/'),
                         declarations: [declaration],
                         fileName,
                     });
@@ -75,14 +78,19 @@ export class TypescriptDocsParser {
     private getStatementsWithSourceLocation(
         sourceFiles: ts.SourceFile[],
     ): Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }> {
-        return sourceFiles.reduce((st, sf) => {
-            const statementsWithSources = sf.statements.map(statement => {
-                const sourceFile = path.relative(path.join(__dirname, '..'), sf.fileName).replace(/\\/g, '/');
-                const sourceLine = sf.getLineAndCharacterOfPosition(statement.getStart()).line + 1;
-                return { statement, sourceFile, sourceLine };
-            });
-            return [...st, ...statementsWithSources];
-        }, [] as Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }>);
+        return sourceFiles.reduce(
+            (st, sf) => {
+                const statementsWithSources = sf.statements.map(statement => {
+                    const sourceFile = path
+                        .relative(path.join(__dirname, '..'), sf.fileName)
+                        .replace(/\\/g, '/');
+                    const sourceLine = sf.getLineAndCharacterOfPosition(statement.getStart()).line + 1;
+                    return { statement, sourceFile, sourceLine };
+                });
+                return [...st, ...statementsWithSources];
+            },
+            [] as Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }>,
+        );
     }
 
     /**
@@ -111,6 +119,7 @@ export class TypescriptDocsParser {
         const description = this.getDeclarationDescription(statement);
         const docsPage = this.getDocsPage(statement);
         const since = this.getSince(statement);
+        const experimental = this.getExperimental(statement);
         const packageName = this.getPackageName(sourceFile);
 
         const info = {
@@ -124,6 +133,7 @@ export class TypescriptDocsParser {
             description,
             page: docsPage,
             since,
+            experimental,
         };
 
         if (ts.isInterfaceDeclaration(statement)) {
@@ -153,7 +163,7 @@ export class TypescriptDocsParser {
         } else if (ts.isEnumDeclaration(statement)) {
             return {
                 ...info,
-                kind: 'enum' as 'enum',
+                kind: 'enum' as const,
                 members: this.parseMembers(statement.members) as PropertyInfo[],
             };
         } else if (ts.isFunctionDeclaration(statement)) {
@@ -226,15 +236,17 @@ export class TypescriptDocsParser {
     }
 
     /**
-     * Parses an array of inteface members into a simple object which can be rendered into markdown.
+     * Parses an array of interface members into a simple object which can be rendered into markdown.
      */
     private parseMembers(
         members: ts.NodeArray<ts.TypeElement | ts.ClassElement | ts.EnumMember>,
     ): Array<PropertyInfo | MethodInfo> {
         const result: Array<PropertyInfo | MethodInfo> = [];
+        const hasModifiers = (member: any): member is { modifiers: NodeArray<Modifier> } =>
+            Array.isArray(member.modifiers);
 
         for (const member of members) {
-            const modifiers = member.modifiers ? member.modifiers.map(m => m.getText()) : [];
+            const modifiers = hasModifiers(member) ? member.modifiers.map(m => m.getText()) : [];
             const isPrivate = modifiers.includes('private');
             if (
                 !isPrivate &&
@@ -250,8 +262,8 @@ export class TypescriptDocsParser {
                 const name = member.name
                     ? member.name.getText()
                     : ts.isIndexSignatureDeclaration(member)
-                    ? '[index]'
-                    : 'constructor';
+                      ? '[index]'
+                      : 'constructor';
                 let description = '';
                 let type = '';
                 let defaultValue = '';
@@ -259,6 +271,7 @@ export class TypescriptDocsParser {
                 let fullText = '';
                 let isInternal = false;
                 let since: string | undefined;
+                let experimental = false;
                 if (ts.isConstructorDeclaration(member)) {
                     fullText = 'constructor';
                 } else if (ts.isMethodDeclaration(member)) {
@@ -274,6 +287,7 @@ export class TypescriptDocsParser {
                     default: comment => (defaultValue = comment || ''),
                     internal: comment => (isInternal = true),
                     since: comment => (since = comment || undefined),
+                    experimental: comment => (experimental = comment != null),
                 });
                 if (isInternal) {
                     continue;
@@ -284,10 +298,11 @@ export class TypescriptDocsParser {
                 const memberInfo: MemberInfo = {
                     fullText,
                     name,
-                    description: this.restoreAtTokens(description),
-                    type,
+                    description: this.restoreTokens(description),
+                    type: type.replace(/`/g, '\\`'),
                     modifiers,
                     since,
+                    experimental,
                 };
                 if (
                     ts.isMethodSignature(member) ||
@@ -359,6 +374,17 @@ export class TypescriptDocsParser {
     }
 
     /**
+     * Reads the @experimental JSDoc tag
+     */
+    private getExperimental(statement: ValidDeclaration): boolean {
+        let experimental = false;
+        this.parseTags(statement, {
+            experimental: comment => (experimental = comment != null),
+        });
+        return experimental;
+    }
+
+    /**
      * Reads the @description JSDoc tag from the interface.
      */
     private getDeclarationDescription(statement: ValidDeclaration): string {
@@ -367,7 +393,7 @@ export class TypescriptDocsParser {
             description: comment => (description += comment),
             example: comment => (description += this.formatExampleCode(comment)),
         });
-        return this.restoreAtTokens(description);
+        return this.restoreTokens(description);
     }
 
     /**
@@ -378,7 +404,7 @@ export class TypescriptDocsParser {
         this.parseTags(statement, {
             docsCategory: comment => (category = comment || ''),
         });
-        return this.kebabCase(category);
+        return normalizeForUrlPart(category);
     }
 
     /**
@@ -418,32 +444,29 @@ export class TypescriptDocsParser {
         return '\n\n*Example*\n\n' + example.replace(/\r/g, '');
     }
 
-    private kebabCase<T extends string | undefined>(input: T): T {
-        if (input == null) {
-            return input;
-        }
-        return input
-            .replace(/([a-z])([A-Z])/g, '$1-$2')
-            .replace(/\s+/g, '-')
-            .toLowerCase() as T;
-    }
-
     /**
      * TypeScript from v3.5.1 interprets all '@' tokens in a tag comment as a new tag. This is a problem e.g.
-     * when a plugin includes in it's description some text like "install the @vendure/some-plugin package". Here,
+     * when a plugin includes in its description some text like "install the @vendure/some-plugin package". Here,
      * TypeScript will interpret "@vendure" as a JSDoc tag and remove it and all remaining text from the comment.
      *
      * The solution is to replace all escaped @ tokens ("\@") with a replacer string so that TypeScript treats them
      * as regular comment text, and then once it has parsed the statement, we replace them with the "@" character.
+     *
+     * Similarly, '/*' is interpreted as end of a comment block. However, it can be useful to specify a globstar
+     * pattern in descriptions and therefore it is supported as long as the leading '/' is escaped ("\/").
      */
-    private replaceEscapedAtTokens(content: string): string {
-        return content.replace(/\\@/g, this.atTokenPlaceholder);
+    private replaceEscapedTokens(content: string): string {
+        return content
+            .replace(/\\@/g, this.atTokenPlaceholder)
+            .replace(/\\\/\*/g, this.commentBlockEndTokenPlaceholder);
     }
 
     /**
-     * Restores "@" tokens which were replaced by the replaceEscapedAtTokens() method.
+     * Restores "@" and "/*" tokens which were replaced by the replaceEscapedTokens() method.
      */
-    private restoreAtTokens(content: string): string {
-        return content.replace(new RegExp(this.atTokenPlaceholder, 'g'), '@');
+    private restoreTokens(content: string): string {
+        return content
+            .replace(new RegExp(this.atTokenPlaceholder, 'g'), '@')
+            .replace(new RegExp(this.commentBlockEndTokenPlaceholder, 'g'), '/*');
     }
 }

@@ -4,9 +4,10 @@ import {
     CreateProductVariantInput,
     DataService,
     DeletionResult,
-    FacetWithValues,
+    FacetWithValuesFragment,
     findTranslation,
-    GetProductWithVariants,
+    GetProductDetailQuery,
+    GetProductWithVariantsQuery,
     LanguageCode,
     UpdateProductInput,
     UpdateProductMutation,
@@ -33,14 +34,10 @@ import { replaceLast } from './replace-last';
 export class ProductDetailService {
     constructor(private dataService: DataService) {}
 
-    getFacets(): Observable<FacetWithValues.Fragment[]> {
-        return this.dataService.facet.getAllFacets().mapSingle(data => data.facets.items);
-    }
-
     getTaxCategories() {
         return this.dataService.settings
             .getTaxCategories()
-            .mapSingle(data => data.taxCategories)
+            .mapSingle(data => data.taxCategories.items)
             .pipe(shareReplay(1));
     }
 
@@ -57,19 +54,15 @@ export class ProductDetailService {
             mergeMap(([{ createProduct }, optionGroups]) => {
                 const addOptionsToProduct$ = optionGroups.length
                     ? forkJoin(
-                          optionGroups.map(optionGroup => {
-                              return this.dataService.product.addOptionGroupToProduct({
+                          optionGroups.map(optionGroup =>
+                              this.dataService.product.addOptionGroupToProduct({
                                   productId: createProduct.id,
                                   optionGroupId: optionGroup.id,
-                              });
-                          }),
+                              }),
+                          ),
                       )
                     : of([]);
-                return addOptionsToProduct$.pipe(
-                    map(() => {
-                        return { createProduct, optionGroups };
-                    }),
-                );
+                return addOptionsToProduct$.pipe(map(() => ({ createProduct, optionGroups })));
             }),
             mergeMap(({ createProduct, optionGroups }) => {
                 const variants = createVariantsConfig.variants.map(v => {
@@ -90,7 +83,13 @@ export class ProductDetailService {
                     };
                 });
                 const options = optionGroups.map(og => og.options).reduce((flat, o) => [...flat, ...o], []);
-                return this.createProductVariants(createProduct, variants, options, languageCode);
+                return this.createProductVariants(
+                    createProduct,
+                    variants,
+                    options,
+                    languageCode,
+                    createVariantsConfig.stockLocationId,
+                );
             }),
         );
     }
@@ -98,8 +97,8 @@ export class ProductDetailService {
     createProductOptionGroups(groups: Array<{ name: string; values: string[] }>, languageCode: LanguageCode) {
         return groups.length
             ? forkJoin(
-                  groups.map(c => {
-                      return this.dataService.product
+                  groups.map(c =>
+                      this.dataService.product
                           .createProductOptionGroups({
                               code: normalizeString(c.name, '-'),
                               translations: [{ languageCode, name: c.name }],
@@ -108,8 +107,8 @@ export class ProductDetailService {
                                   translations: [{ languageCode, name: v }],
                               })),
                           })
-                          .pipe(map(data => data.createProductOptionGroup));
-                  }),
+                          .pipe(map(data => data.createProductOptionGroup)),
+                  ),
               )
             : of([]);
     }
@@ -119,6 +118,7 @@ export class ProductDetailService {
         variantData: Array<{ price: number; sku: string; stock: number; optionIds: string[] }>,
         options: Array<{ id: string; name: string }>,
         languageCode: LanguageCode,
+        stockLocationId: string,
     ) {
         const variants: CreateProductVariantInput[] = variantData.map(v => {
             const name = options.length
@@ -132,11 +132,16 @@ export class ProductDetailService {
                 productId: product.id,
                 price: v.price,
                 sku: v.sku,
-                stockOnHand: v.stock,
                 translations: [
                     {
                         languageCode,
                         name,
+                    },
+                ],
+                stockLevels: [
+                    {
+                        stockLocationId,
+                        stockOnHand: v.stock,
                     },
                 ],
                 optionIds: v.optionIds,
@@ -151,7 +156,7 @@ export class ProductDetailService {
     }
 
     updateProduct(updateOptions: {
-        product: GetProductWithVariants.Product;
+        product: NonNullable<GetProductDetailQuery['product']>;
         languageCode: LanguageCode;
         autoUpdate: boolean;
         productInput?: UpdateProductInput;
@@ -163,7 +168,7 @@ export class ProductDetailService {
 
         const variants$ = autoUpdate
             ? this.dataService.product
-                  .getProductVariants({}, product.id)
+                  .getProductVariantsForProduct({}, product.id)
                   .mapSingle(({ productVariants }) => productVariants.items)
             : of([]);
 
@@ -218,58 +223,82 @@ export class ProductDetailService {
         );
     }
 
-    updateProductOption(
-        input: UpdateProductOptionInput & { autoUpdate: boolean },
-        product: GetProductWithVariants.Product,
+    updateProductOptions(
+        inputs: UpdateProductOptionInput[],
+        autoUpdateProductNames: boolean,
+        product: NonNullable<GetProductDetailQuery['product']>,
         languageCode: LanguageCode,
     ) {
-        const variants$ = input.autoUpdate
+        const variants$ = autoUpdateProductNames
             ? this.dataService.product
-                  .getProductVariants({}, product.id)
+                  .getProductVariantsForProduct({}, product.id)
                   .mapSingle(({ productVariants }) => productVariants.items)
             : of([]);
 
         return variants$.pipe(
             mergeMap(variants => {
                 let updateProductVariantNames$: Observable<any> = of([]);
-                if (input.autoUpdate) {
-                    // Update any ProductVariants' names which include the option name
-                    let oldOptionName: string | undefined;
-                    const newOptionName = findTranslation(input, languageCode)?.name;
-                    if (!newOptionName) {
-                        updateProductVariantNames$ = of([]);
+                if (autoUpdateProductNames) {
+                    const replacementMap = new Map<string, string>();
+
+                    for (const input of inputs) {
+                        const newOptionName = findTranslation(input, languageCode)?.name;
+                        let oldOptionName: string | undefined;
+                        for (const variant of variants) {
+                            if (oldOptionName) {
+                                continue;
+                            }
+                            if (variant.options.map(o => o.id).includes(input.id)) {
+                                if (!oldOptionName) {
+                                    oldOptionName = findTranslation(
+                                        variant.options.find(o => o.id === input.id),
+                                        languageCode,
+                                    )?.name;
+                                }
+                            }
+                        }
+                        if (oldOptionName && newOptionName) {
+                            replacementMap.set(oldOptionName, newOptionName);
+                        }
                     }
+
                     const variantsToUpdate: UpdateProductVariantInput[] = [];
-                    for (const variant of variants) {
-                        if (variant.options.map(o => o.id).includes(input.id)) {
-                            if (!oldOptionName) {
-                                oldOptionName = findTranslation(
-                                    variant.options.find(o => o.id === input.id),
-                                    languageCode,
-                                )?.name;
+                    if (replacementMap.size) {
+                        const oldOptionNames = Array.from(replacementMap.keys());
+                        for (const variant of variants) {
+                            const variantName = findTranslation(variant, languageCode)?.name;
+                            if (!variantName) {
+                                continue;
                             }
-                            const variantName = findTranslation(variant, languageCode)?.name || '';
-                            if (oldOptionName && newOptionName && variantName.includes(oldOptionName)) {
-                                variantsToUpdate.push({
-                                    id: variant.id,
-                                    translations: [
-                                        {
-                                            languageCode,
-                                            name: replaceLast(variantName, oldOptionName, newOptionName),
-                                        },
-                                    ],
-                                });
+                            if (!oldOptionNames.some(oldOptionName => variantName.includes(oldOptionName))) {
+                                continue;
                             }
+                            const updatedVariantName = oldOptionNames.reduce(
+                                (name, oldOptionName) =>
+                                    replaceLast(name, oldOptionName, replacementMap.get(oldOptionName)!),
+                                variantName,
+                            );
+                            variantsToUpdate.push({
+                                id: variant.id,
+                                translations: [
+                                    {
+                                        languageCode,
+                                        name: updatedVariantName,
+                                    },
+                                ],
+                            });
                         }
                     }
                     if (variantsToUpdate.length) {
                         updateProductVariantNames$ =
                             this.dataService.product.updateProductVariants(variantsToUpdate);
+                    } else {
+                        updateProductVariantNames$ = of([]);
                     }
                 }
-                return this.dataService.product
-                    .updateProductOption(input)
-                    .pipe(mergeMap(() => updateProductVariantNames$));
+                return forkJoin(
+                    inputs.map(input => this.dataService.product.updateProductOption(input)),
+                ).pipe(mergeMap(() => updateProductVariantNames$));
             }),
         );
     }

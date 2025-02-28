@@ -7,14 +7,24 @@ import {
     SelectionNode,
 } from 'graphql';
 
-import { CustomFields, RelationCustomField, RelationCustomFieldFragment } from '../../common/generated-types';
+import {
+    CustomFieldConfig,
+    CustomFields,
+    RelationCustomFieldFragment,
+    StructCustomFieldFragment,
+} from '../../common/generated-types';
 
 /**
  * Given a GraphQL AST (DocumentNode), this function looks for fragment definitions and adds and configured
  * custom fields to those fragments.
  */
-export function addCustomFields(documentNode: DocumentNode, customFields: CustomFields): DocumentNode {
-    const fragmentDefs = documentNode.definitions.filter(isFragmentDefinition);
+export function addCustomFields(
+    documentNode: DocumentNode,
+    customFields: Map<string, CustomFieldConfig[]>,
+    includeCustomFields?: string[],
+): DocumentNode {
+    const clone = JSON.parse(JSON.stringify(documentNode)) as DocumentNode;
+    const fragmentDefs = clone.definitions.filter(isFragmentDefinition);
 
     for (const fragmentDef of fragmentDefs) {
         let entityType = fragmentDef.typeCondition.name.value as keyof Pick<
@@ -28,18 +38,23 @@ export function addCustomFields(documentNode: DocumentNode, customFields: Custom
             entityType = 'Address';
         }
 
-        const customFieldsForType = customFields[entityType];
+        if (entityType === ('Country' as any)) {
+            // Country is an alias of Region
+            entityType = 'Region';
+        }
+
+        const customFieldsForType = customFields.get(entityType);
         if (customFieldsForType && customFieldsForType.length) {
-            (fragmentDef.selectionSet.selections as SelectionNode[]).push({
-                name: {
-                    kind: Kind.NAME,
-                    value: 'customFields',
-                },
-                kind: Kind.FIELD,
-                selectionSet: {
-                    kind: Kind.SELECTION_SET,
-                    selections: customFieldsForType.map(customField => {
-                        return {
+            // Check if there is already a customFields field in the fragment
+            // to avoid duplication
+            const existingCustomFieldsField = fragmentDef.selectionSet.selections.find(
+                selection => isFieldNode(selection) && selection.name.value === 'customFields',
+            ) as FieldNode | undefined;
+            const selectionNodes: SelectionNode[] = customFieldsForType
+                .filter(field => !includeCustomFields || includeCustomFields.includes(field.name))
+                .map(
+                    customField =>
+                        ({
                             kind: Kind.FIELD,
                             name: {
                                 kind: Kind.NAME,
@@ -51,27 +66,61 @@ export function addCustomFields(documentNode: DocumentNode, customFields: Custom
                                 ? {
                                       selectionSet: {
                                           kind: Kind.SELECTION_SET,
-                                          selections: (customField as RelationCustomFieldFragment).scalarFields.map(
+                                          selections: (
+                                              customField as RelationCustomFieldFragment
+                                          ).scalarFields.map(f => ({
+                                              kind: Kind.FIELD,
+                                              name: { kind: Kind.NAME, value: f },
+                                          })),
+                                      },
+                                  }
+                                : {}),
+                            ...(customField.type === 'struct'
+                                ? {
+                                      selectionSet: {
+                                          kind: Kind.SELECTION_SET,
+                                          selections: (customField as StructCustomFieldFragment).fields.map(
                                               f => ({
                                                   kind: Kind.FIELD,
-                                                  name: { kind: Kind.NAME, value: f },
+                                                  name: { kind: Kind.NAME, value: f.name },
                                               }),
                                           ),
                                       },
                                   }
                                 : {}),
-                        } as FieldNode;
-                    }),
-                },
-            });
+                        }) as FieldNode,
+                );
+            if (!existingCustomFieldsField) {
+                // If no customFields field exists, add one
+                (fragmentDef.selectionSet.selections as SelectionNode[]).push({
+                    kind: Kind.FIELD,
+                    name: {
+                        kind: Kind.NAME,
+                        value: 'customFields',
+                    },
+                    selectionSet: {
+                        kind: Kind.SELECTION_SET,
+                        selections: selectionNodes,
+                    },
+                });
+            } else {
+                // If a customFields field already exists, add the custom fields
+                // to the existing selection set
+                (existingCustomFieldsField.selectionSet as any) = {
+                    kind: Kind.SELECTION_SET,
+                    selections: selectionNodes,
+                };
+            }
 
-            const localeStrings = customFieldsForType.filter(field => field.type === 'localeString');
+            const localizedFields = customFieldsForType.filter(
+                field => field.type === 'localeString' || field.type === 'localeText',
+            );
 
             const translationsField = fragmentDef.selectionSet.selections
                 .filter(isFieldNode)
                 .find(field => field.name.value === 'translations');
 
-            if (localeStrings.length && translationsField && translationsField.selectionSet) {
+            if (localizedFields.length && translationsField && translationsField.selectionSet) {
                 (translationsField.selectionSet.selections as SelectionNode[]).push({
                     name: {
                         kind: Kind.NAME,
@@ -80,22 +129,23 @@ export function addCustomFields(documentNode: DocumentNode, customFields: Custom
                     kind: Kind.FIELD,
                     selectionSet: {
                         kind: Kind.SELECTION_SET,
-                        selections: localeStrings.map(customField => {
-                            return {
-                                kind: Kind.FIELD,
-                                name: {
-                                    kind: Kind.NAME,
-                                    value: customField.name,
-                                },
-                            } as FieldNode;
-                        }),
+                        selections: localizedFields.map(
+                            customField =>
+                                ({
+                                    kind: Kind.FIELD,
+                                    name: {
+                                        kind: Kind.NAME,
+                                        value: customField.name,
+                                    },
+                                }) as FieldNode,
+                        ),
                     },
                 });
             }
         }
     }
 
-    return documentNode;
+    return clone;
 }
 
 function isFragmentDefinition(value: DefinitionNode): value is FragmentDefinitionNode {

@@ -1,11 +1,12 @@
-import { HttpService } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
 import {
     AuthenticationStrategy,
     ExternalAuthenticationService,
     Injector,
     Logger,
     RequestContext,
-    RoleService,
+    Role,
+    TransactionalConnection,
     User,
 } from '@vendure/core';
 import { DocumentNode } from 'graphql';
@@ -29,13 +30,13 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
     readonly name = 'keycloak';
     private externalAuthenticationService: ExternalAuthenticationService;
     private httpService: HttpService;
-    private roleService: RoleService;
+    private connection: TransactionalConnection;
     private bearerToken: string;
 
     init(injector: Injector) {
         this.externalAuthenticationService = injector.get(ExternalAuthenticationService);
         this.httpService = injector.get(HttpService);
-        this.roleService = injector.get(RoleService);
+        this.connection = injector.get(TransactionalConnection);
     }
 
     defineInputType(): DocumentNode {
@@ -51,14 +52,14 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
         this.bearerToken = data.token;
         try {
             const response = await this.httpService
-                .get('http://localhost:9000/auth/realms/myrealm/protocol/openid-connect/userinfo', {
+                .get('http://localhost:9000/realms/myrealm/protocol/openid-connect/userinfo', {
                     headers: {
                         Authorization: `Bearer ${this.bearerToken}`,
                     },
                 })
                 .toPromise();
-            userInfo = response.data;
-        } catch (e) {
+            userInfo = response?.data;
+        } catch (e: any) {
             Logger.error(e);
             return false;
         }
@@ -66,13 +67,18 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
         if (!userInfo) {
             return false;
         }
-        const user = await this.externalAuthenticationService.findAdministratorUser(this.name, userInfo.sub);
+        const user = await this.externalAuthenticationService.findAdministratorUser(
+            ctx,
+            this.name,
+            userInfo.sub,
+        );
         if (user) {
             return user;
         }
 
-        const roles = await this.roleService.findAll(ctx);
-        const merchantRole = roles.items.find(r => r.code === 'merchant');
+        const merchantRole = await this.connection.getRepository(ctx, Role).findOne({
+            where: { code: 'merchant' },
+        });
 
         if (!merchantRole) {
             Logger.error(`Could not find "merchant" role`);
@@ -84,8 +90,8 @@ export class KeycloakAuthenticationStrategy implements AuthenticationStrategy<Ke
             externalIdentifier: userInfo.sub,
             identifier: userInfo.preferred_username,
             emailAddress: userInfo.email,
-            firstName: userInfo.given_name,
-            lastName: userInfo.family_name,
+            firstName: userInfo.given_name ?? userInfo.preferred_username,
+            lastName: userInfo.family_name ?? userInfo.preferred_username,
             roles: [merchantRole],
         });
     }

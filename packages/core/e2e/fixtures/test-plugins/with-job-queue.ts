@@ -41,7 +41,7 @@ class TestController implements OnModuleInit {
         return job
             .updates()
             .toPromise()
-            .then(update => update.result);
+            .then(update => update?.result);
     }
 }
 
@@ -51,5 +51,5 @@ class TestController implements OnModuleInit {
 })
 export class PluginWithJobQueue {
     static jobHasDoneWork = false;
-    static jobSubject = new Subject();
+    static jobSubject = new Subject<void>();
 }

@@ -12,6 +12,7 @@ export const TEST_ORDER_FRAGMENT = gql`
         shippingWithTax
         total
         totalWithTax
+        currencyCode
         couponCodes
         discounts {
             adjustmentSource
@@ -29,6 +30,7 @@ export const TEST_ORDER_FRAGMENT = gql`
             unitPriceWithTax
             unitPriceChangeSinceAdded
             unitPriceWithTaxChangeSinceAdded
+            discountedUnitPriceWithTax
             proratedUnitPriceWithTax
             productVariant {
                 id
@@ -40,13 +42,9 @@ export const TEST_ORDER_FRAGMENT = gql`
                 description
                 type
             }
-            items {
-                id
-                unitPrice
-                unitPriceWithTax
-            }
         }
         shippingLines {
+            priceWithTax
             shippingMethod {
                 id
                 code
@@ -78,10 +76,18 @@ export const UPDATED_ORDER_FRAGMENT = gql`
         active
         total
         totalWithTax
+        currencyCode
         lines {
             id
             quantity
             productVariant {
+                id
+            }
+            unitPrice
+            unitPriceWithTax
+            linePrice
+            linePriceWithTax
+            featuredAsset {
                 id
             }
             discounts {
@@ -115,6 +121,9 @@ export const ADD_ITEM_TO_ORDER = gql`
                 order {
                     ...UpdatedOrder
                 }
+            }
+            ... on OrderInterceptorError {
+                interceptorError
             }
         }
     }
@@ -343,12 +352,6 @@ export const GET_ACTIVE_ORDER_WITH_PRICE_DATA = gql`
                 linePrice
                 lineTax
                 linePriceWithTax
-                items {
-                    id
-                    unitPrice
-                    unitPriceWithTax
-                    taxRate
-                }
                 taxLines {
                     taxRate
                     description
@@ -372,6 +375,9 @@ export const ADJUST_ITEM_QUANTITY = gql`
                 errorCode
                 message
             }
+            ... on OrderInterceptorError {
+                interceptorError
+            }
         }
     }
     ${TEST_ORDER_FRAGMENT}
@@ -384,6 +390,9 @@ export const REMOVE_ITEM_FROM_ORDER = gql`
             ... on ErrorResult {
                 errorCode
                 message
+            }
+            ... on OrderInterceptorError {
+                interceptorError
             }
         }
     }
@@ -403,7 +412,7 @@ export const GET_ELIGIBLE_SHIPPING_METHODS = gql`
 `;
 
 export const SET_SHIPPING_METHOD = gql`
-    mutation SetShippingMethod($id: ID!) {
+    mutation SetShippingMethod($id: [ID!]!) {
         setOrderShippingMethod(shippingMethodId: $id) {
             ...TestOrderFragment
             ... on ErrorResult {
@@ -437,6 +446,9 @@ export const SET_CUSTOMER = gql`
             ... on ErrorResult {
                 errorCode
                 message
+            }
+            ... on GuestCheckoutError {
+                errorDetail
             }
         }
     }
@@ -499,52 +511,85 @@ export const TRANSITION_TO_STATE = gql`
     ${TEST_ORDER_FRAGMENT}
 `;
 
+export const ORDER_WITH_ADDRESSES_FRAGMENT = gql`
+    fragment OrderWithAddresses on Order {
+        lines {
+            id
+        }
+        shippingAddress {
+            fullName
+            company
+            streetLine1
+            streetLine2
+            city
+            province
+            postalCode
+            country
+            phoneNumber
+        }
+        billingAddress {
+            fullName
+            company
+            streetLine1
+            streetLine2
+            city
+            province
+            postalCode
+            country
+            phoneNumber
+        }
+    }
+`;
+
 export const SET_SHIPPING_ADDRESS = gql`
     mutation SetShippingAddress($input: CreateAddressInput!) {
         setOrderShippingAddress(input: $input) {
-            ... on Order {
-                shippingAddress {
-                    fullName
-                    company
-                    streetLine1
-                    streetLine2
-                    city
-                    province
-                    postalCode
-                    country
-                    phoneNumber
-                }
-            }
+            ...OrderWithAddresses
             ... on ErrorResult {
                 errorCode
                 message
             }
         }
     }
+    ${ORDER_WITH_ADDRESSES_FRAGMENT}
 `;
 
 export const SET_BILLING_ADDRESS = gql`
     mutation SetBillingAddress($input: CreateAddressInput!) {
         setOrderBillingAddress(input: $input) {
-            ... on Order {
-                billingAddress {
-                    fullName
-                    company
-                    streetLine1
-                    streetLine2
-                    city
-                    province
-                    postalCode
-                    country
-                    phoneNumber
-                }
-            }
+            ...OrderWithAddresses
             ... on ErrorResult {
                 errorCode
                 message
             }
         }
     }
+    ${ORDER_WITH_ADDRESSES_FRAGMENT}
+`;
+
+export const UNSET_SHIPPING_ADDRESS = gql`
+    mutation UnsetShippingAddress {
+        unsetOrderShippingAddress {
+            ...OrderWithAddresses
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+        }
+    }
+    ${ORDER_WITH_ADDRESSES_FRAGMENT}
+`;
+export const UNSET_BILLING_ADDRESS = gql`
+    mutation UnsetBillingAddress {
+        unsetOrderBillingAddress {
+            ...OrderWithAddresses
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+        }
+    }
+    ${ORDER_WITH_ADDRESSES_FRAGMENT}
 `;
 
 export const TEST_ORDER_WITH_PAYMENTS_FRAGMENT = gql`
@@ -635,15 +680,12 @@ export const GET_ACTIVE_ORDER_CUSTOMER_WITH_ITEM_FULFILLMENTS = gql`
                     state
                     lines {
                         id
-                        items {
-                            id
-                            fulfillment {
-                                id
-                                state
-                                method
-                                trackingCode
-                            }
-                        }
+                    }
+                    fulfillments {
+                        id
+                        state
+                        method
+                        trackingCode
                     }
                 }
             }
@@ -678,6 +720,21 @@ export const GET_ACTIVE_ORDER_ORDERS = gql`
                     items {
                         id
                     }
+                }
+            }
+        }
+    }
+`;
+
+export const GET_ACTIVE_CUSTOMER_ORDERS = gql`
+    query GetActiveCustomerOrders {
+        activeCustomer {
+            id
+            orders {
+                totalItems
+                items {
+                    id
+                    state
                 }
             }
         }

@@ -1,6 +1,7 @@
 import {
     Coordinate,
     CurrencyCode,
+    LanguageCode,
     PriceRange,
     SearchResult,
     SearchResultAsset,
@@ -8,6 +9,9 @@ import {
 } from '@vendure/common/lib/generated-types';
 import { ID } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
+import { Brackets, QueryBuilder, SelectQueryBuilder } from 'typeorm';
+
+import { SearchIndexItem } from '../entities/search-index-item.entity';
 
 /**
  * Maps a raw database result to a SearchResult.
@@ -57,6 +61,7 @@ export function mapToSearchResult(raw: any, currencyCode: CurrencyCode): SearchR
         productAsset,
         productVariantAsset,
         score: raw.score || 0,
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         inStock: raw.si_inStock,
     };
@@ -100,7 +105,7 @@ function parseFocalPoint(focalPoint: any): Coordinate | undefined {
     if (focalPoint && typeof focalPoint === 'string') {
         try {
             return JSON.parse(focalPoint);
-        } catch (e) {
+        } catch (e: any) {
             // fall though
         }
     }
@@ -109,4 +114,50 @@ function parseFocalPoint(focalPoint: any): Coordinate | undefined {
 
 export function createPlaceholderFromId(id: ID): string {
     return '_' + id.toString().replace(/-/g, '_');
+}
+
+/**
+ * Applies language constraints for {@link SearchIndexItem} query.
+ *
+ * @param qb QueryBuilder instance
+ * @param languageCode Preferred language code
+ * @param defaultLanguageCode Default language code that is used if {@link SearchIndexItem} is not available in preferred language
+ */
+export function applyLanguageConstraints(
+    qb: SelectQueryBuilder<SearchIndexItem>,
+    languageCode: LanguageCode,
+    defaultLanguageCode: LanguageCode,
+) {
+    const lcEscaped = qb.escape('languageCode');
+    const ciEscaped = qb.escape('channelId');
+    const pviEscaped = qb.escape('productVariantId');
+
+    if (languageCode === defaultLanguageCode) {
+        qb.andWhere(`si.${lcEscaped} = :languageCode`, {
+            languageCode,
+        });
+    } else {
+        qb.andWhere(`si.${lcEscaped} IN (:...languageCodes)`, {
+            languageCodes: [languageCode, defaultLanguageCode],
+        });
+
+        qb.leftJoin(
+            SearchIndexItem,
+            'sil',
+            `sil.${lcEscaped} = :languageCode AND sil.${ciEscaped} = si.${ciEscaped} AND sil.${pviEscaped} = si.${pviEscaped}`,
+            {
+                languageCode,
+            },
+        );
+
+        qb.andWhere(
+            new Brackets(qb1 => {
+                qb1.where(`si.${lcEscaped} = :languageCode1`, {
+                    languageCode1: languageCode,
+                }).orWhere(`sil.${lcEscaped} IS NULL`);
+            }),
+        );
+    }
+
+    return qb;
 }

@@ -1,4 +1,4 @@
-// tslint:disable
+/* eslint-disable */
 
       export interface PossibleTypesResultData {
         possibleTypes: {
@@ -8,29 +8,40 @@
       const result: PossibleTypesResultData = {
   "possibleTypes": {
     "AddFulfillmentToOrderResult": [
-      "Fulfillment",
+      "CreateFulfillmentError",
       "EmptyOrderLineSelectionError",
-      "ItemsAlreadyFulfilledError",
+      "Fulfillment",
+      "FulfillmentStateTransitionError",
       "InsufficientStockOnHandError",
       "InvalidFulfillmentHandlerError",
-      "FulfillmentStateTransitionError",
-      "CreateFulfillmentError"
+      "ItemsAlreadyFulfilledError"
     ],
     "AddManualPaymentToOrderResult": [
-      "Order",
-      "ManualPaymentStateError"
+      "ManualPaymentStateError",
+      "Order"
+    ],
+    "ApplyCouponCodeResult": [
+      "CouponCodeExpiredError",
+      "CouponCodeInvalidError",
+      "CouponCodeLimitError",
+      "Order"
     ],
     "AuthenticationResult": [
       "CurrentUser",
       "InvalidCredentialsError"
     ],
     "CancelOrderResult": [
-      "Order",
-      "EmptyOrderLineSelectionError",
-      "QuantityTooGreatError",
-      "MultipleOrderError",
       "CancelActiveOrderError",
-      "OrderStateTransitionError"
+      "EmptyOrderLineSelectionError",
+      "MultipleOrderError",
+      "Order",
+      "OrderStateTransitionError",
+      "QuantityTooGreatError"
+    ],
+    "CancelPaymentResult": [
+      "CancelPaymentError",
+      "Payment",
+      "PaymentStateTransitionError"
     ],
     "CreateAssetResult": [
       "Asset",
@@ -45,8 +56,8 @@
       "EmailAddressConflictError"
     ],
     "CreatePromotionResult": [
-      "Promotion",
-      "MissingConditionsError"
+      "MissingConditionsError",
+      "Promotion"
     ],
     "CustomField": [
       "BooleanCustomFieldConfig",
@@ -54,31 +65,44 @@
       "FloatCustomFieldConfig",
       "IntCustomFieldConfig",
       "LocaleStringCustomFieldConfig",
+      "LocaleTextCustomFieldConfig",
       "RelationCustomFieldConfig",
       "StringCustomFieldConfig",
+      "StructCustomFieldConfig",
       "TextCustomFieldConfig"
     ],
     "CustomFieldConfig": [
-      "StringCustomFieldConfig",
-      "LocaleStringCustomFieldConfig",
-      "IntCustomFieldConfig",
-      "FloatCustomFieldConfig",
       "BooleanCustomFieldConfig",
       "DateTimeCustomFieldConfig",
+      "FloatCustomFieldConfig",
+      "IntCustomFieldConfig",
+      "LocaleStringCustomFieldConfig",
+      "LocaleTextCustomFieldConfig",
       "RelationCustomFieldConfig",
+      "StringCustomFieldConfig",
+      "StructCustomFieldConfig",
       "TextCustomFieldConfig"
+    ],
+    "DuplicateEntityResult": [
+      "DuplicateEntityError",
+      "DuplicateEntitySuccess"
     ],
     "ErrorResult": [
       "AlreadyRefundedError",
       "CancelActiveOrderError",
+      "CancelPaymentError",
       "ChannelDefaultLanguageError",
       "CouponCodeExpiredError",
       "CouponCodeInvalidError",
       "CouponCodeLimitError",
       "CreateFulfillmentError",
+      "DuplicateEntityError",
       "EmailAddressConflictError",
       "EmptyOrderLineSelectionError",
+      "FacetInUseError",
       "FulfillmentStateTransitionError",
+      "GuestCheckoutError",
+      "IneligibleShippingMethodError",
       "InsufficientStockError",
       "InsufficientStockOnHandError",
       "InvalidCredentialsError",
@@ -91,9 +115,12 @@
       "MultipleOrderError",
       "NativeAuthStrategyError",
       "NegativeQuantityError",
+      "NoActiveOrderError",
       "NoChangesSpecifiedError",
       "NothingToRefundError",
+      "OrderInterceptorError",
       "OrderLimitError",
+      "OrderModificationError",
       "OrderModificationStateError",
       "OrderStateTransitionError",
       "PaymentMethodMissingError",
@@ -101,23 +128,25 @@
       "PaymentStateTransitionError",
       "ProductOptionInUseError",
       "QuantityTooGreatError",
+      "RefundAmountError",
       "RefundOrderStateError",
       "RefundPaymentIdMissingError",
       "RefundStateTransitionError",
       "SettlePaymentError"
     ],
     "ModifyOrderResult": [
-      "Order",
-      "NoChangesSpecifiedError",
-      "OrderModificationStateError",
-      "PaymentMethodMissingError",
-      "RefundPaymentIdMissingError",
-      "OrderLimitError",
-      "NegativeQuantityError",
-      "InsufficientStockError",
       "CouponCodeExpiredError",
       "CouponCodeInvalidError",
-      "CouponCodeLimitError"
+      "CouponCodeLimitError",
+      "IneligibleShippingMethodError",
+      "InsufficientStockError",
+      "NegativeQuantityError",
+      "NoChangesSpecifiedError",
+      "Order",
+      "OrderLimitError",
+      "OrderModificationStateError",
+      "PaymentMethodMissingError",
+      "RefundPaymentIdMissingError"
     ],
     "NativeAuthenticationResult": [
       "CurrentUser",
@@ -142,7 +171,6 @@
       "HistoryEntry",
       "Job",
       "Order",
-      "OrderItem",
       "OrderLine",
       "OrderModification",
       "Payment",
@@ -152,13 +180,17 @@
       "ProductOptionGroup",
       "ProductVariant",
       "Promotion",
+      "Province",
       "Refund",
       "Release",
       "Return",
       "Role",
       "Sale",
+      "Seller",
       "ShippingMethod",
       "StockAdjustment",
+      "StockLevel",
+      "StockLocation",
       "Surcharge",
       "Tag",
       "TaxCategory",
@@ -169,11 +201,13 @@
     "PaginatedList": [
       "AdministratorList",
       "AssetList",
+      "ChannelList",
       "CollectionList",
       "CountryList",
       "CustomerGroupList",
       "CustomerList",
       "FacetList",
+      "FacetValueList",
       "HistoryEntryList",
       "JobList",
       "OrderList",
@@ -181,35 +215,64 @@
       "ProductList",
       "ProductVariantList",
       "PromotionList",
+      "ProvinceList",
       "RoleList",
+      "SellerList",
       "ShippingMethodList",
+      "StockLocationList",
       "TagList",
-      "TaxRateList"
+      "TaxCategoryList",
+      "TaxRateList",
+      "ZoneList"
     ],
     "RefundOrderResult": [
-      "Refund",
-      "QuantityTooGreatError",
+      "AlreadyRefundedError",
+      "MultipleOrderError",
       "NothingToRefundError",
       "OrderStateTransitionError",
-      "MultipleOrderError",
       "PaymentOrderMismatchError",
+      "QuantityTooGreatError",
+      "Refund",
+      "RefundAmountError",
       "RefundOrderStateError",
-      "AlreadyRefundedError",
       "RefundStateTransitionError"
+    ],
+    "Region": [
+      "Country",
+      "Province"
+    ],
+    "RemoveFacetFromChannelResult": [
+      "Facet",
+      "FacetInUseError"
     ],
     "RemoveOptionGroupFromProductResult": [
       "Product",
       "ProductOptionInUseError"
     ],
+    "RemoveOrderItemsResult": [
+      "Order",
+      "OrderInterceptorError",
+      "OrderModificationError"
+    ],
     "SearchResultPrice": [
       "PriceRange",
       "SinglePrice"
     ],
+    "SetCustomerForDraftOrderResult": [
+      "EmailAddressConflictError",
+      "Order"
+    ],
+    "SetOrderShippingMethodResult": [
+      "IneligibleShippingMethodError",
+      "NoActiveOrderError",
+      "Order",
+      "OrderModificationError"
+    ],
     "SettlePaymentResult": [
+      "OrderStateTransitionError",
       "Payment",
-      "SettlePaymentError",
       "PaymentStateTransitionError",
-      "OrderStateTransitionError"
+      "SettlePaymentError"
     ],
     "SettleRefundResult": [
       "Refund",
@@ -224,12 +287,28 @@
       "StockAdjustment"
     ],
     "StockMovementItem": [
-      "StockAdjustment",
       "Allocation",
-      "Sale",
       "Cancellation",
+      "Release",
       "Return",
-      "Release"
+      "Sale",
+      "StockAdjustment"
+    ],
+    "StructField": [
+      "BooleanStructFieldConfig",
+      "DateTimeStructFieldConfig",
+      "FloatStructFieldConfig",
+      "IntStructFieldConfig",
+      "StringStructFieldConfig",
+      "TextStructFieldConfig"
+    ],
+    "StructFieldConfig": [
+      "BooleanStructFieldConfig",
+      "DateTimeStructFieldConfig",
+      "FloatStructFieldConfig",
+      "IntStructFieldConfig",
+      "StringStructFieldConfig",
+      "TextStructFieldConfig"
     ],
     "TransitionFulfillmentToStateResult": [
       "Fulfillment",
@@ -252,12 +331,20 @@
       "EmailAddressConflictError"
     ],
     "UpdateGlobalSettingsResult": [
-      "GlobalSettings",
-      "ChannelDefaultLanguageError"
+      "ChannelDefaultLanguageError",
+      "GlobalSettings"
+    ],
+    "UpdateOrderItemsResult": [
+      "InsufficientStockError",
+      "NegativeQuantityError",
+      "Order",
+      "OrderInterceptorError",
+      "OrderLimitError",
+      "OrderModificationError"
     ],
     "UpdatePromotionResult": [
-      "Promotion",
-      "MissingConditionsError"
+      "MissingConditionsError",
+      "Promotion"
     ]
   }
 };

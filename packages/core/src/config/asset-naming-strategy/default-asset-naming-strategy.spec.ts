@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest';
+
 import { RequestContext } from '../../api/common/request-context';
 
 import { DefaultAssetNamingStrategy } from './default-asset-naming-strategy';
@@ -54,13 +56,14 @@ describe('DefaultAssetNamingStrategy', () => {
             expect(strategy.generatePreviewFileName(ctx, 'foo.png')).toBe('foo__preview.png');
             expect(strategy.generatePreviewFileName(ctx, 'foo.webp')).toBe('foo__preview.webp');
             expect(strategy.generatePreviewFileName(ctx, 'foo.tiff')).toBe('foo__preview.tiff');
+            expect(strategy.generatePreviewFileName(ctx, 'foo.gif')).toBe('foo__preview.gif');
+            expect(strategy.generatePreviewFileName(ctx, 'foo.avif')).toBe('foo__preview.avif');
         });
 
         it('adds a png extension for unsupported images and other files', () => {
             const strategy = new DefaultAssetNamingStrategy();
 
             expect(strategy.generatePreviewFileName(ctx, 'foo.svg')).toBe('foo__preview.svg.png');
-            expect(strategy.generatePreviewFileName(ctx, 'foo.gif')).toBe('foo__preview.gif.png');
             expect(strategy.generatePreviewFileName(ctx, 'foo.pdf')).toBe('foo__preview.pdf.png');
         });
     });

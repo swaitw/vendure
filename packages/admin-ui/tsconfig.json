@@ -12,16 +12,17 @@
     "strict": true,
     "noImplicitAny": false,
     "strictPropertyInitialization": false,
-    "target": "es2015",
+    "target": "ES2022",
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
+    "jsx": "react",
     "typeRoots": [
       "node_modules/@types",
       "./typings"
     ],
     "lib": [
-      "es2017",
+      "es2019",
       "dom",
       "esnext.asynciterable"
     ],
@@ -50,12 +51,16 @@
       "@vendure/admin-ui/order": [
         "./src/lib/order/src/public_api"
       ],
+      "@vendure/admin-ui/react": [
+        "./src/lib/react/src/public_api"
+      ],
       "@vendure/admin-ui/settings": [
         "./src/lib/settings/src/public_api"
       ],
       "@vendure/admin-ui/system": [
         "./src/lib/system/src/public_api"
       ]
-    }
+    },
+    "useDefineForClassFields": false
   }
 }

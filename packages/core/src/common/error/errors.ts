@@ -65,7 +65,7 @@ export class UnauthorizedError extends I18nError {
  * @docsPage Error Types
  */
 export class ForbiddenError extends I18nError {
-    constructor(logLevel: LogLevel = LogLevel.Error) {
+    constructor(logLevel: LogLevel = LogLevel.Warn) {
         super('error.forbidden', {}, 'FORBIDDEN', logLevel);
     }
 }
@@ -93,7 +93,7 @@ export class ChannelNotFoundError extends I18nError {
  * @docsPage Error Types
  */
 export class EntityNotFoundError extends I18nError {
-    constructor(entityName: keyof typeof coreEntitiesMap, id: ID) {
+    constructor(entityName: keyof typeof coreEntitiesMap | string, id: ID) {
         super('error.entity-with-id-not-found', { entityName, id }, 'ENTITY_NOT_FOUND', LogLevel.Warn);
     }
 }

@@ -1,7 +1,6 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { GqlExecutionContext } from '@nestjs/graphql';
-import { LanguageCode } from '@vendure/common/lib/generated-types';
 import { getGraphQlInputName } from '@vendure/common/lib/shared-utils';
 import {
     GraphQLInputType,
@@ -12,12 +11,11 @@ import {
     TypeNode,
 } from 'graphql';
 
-import { REQUEST_CONTEXT_KEY } from '../../common/constants';
 import { Injector } from '../../common/injector';
 import { ConfigService } from '../../config/config.service';
 import { CustomFieldConfig, CustomFields } from '../../config/custom-field/custom-field-types';
 import { parseContext } from '../common/parse-context';
-import { RequestContext } from '../common/request-context';
+import { internal_getRequestContext, RequestContext } from '../common/request-context';
 import { validateCustomFieldValue } from '../common/validate-custom-field-value';
 
 /**
@@ -29,12 +27,16 @@ import { validateCustomFieldValue } from '../common/validate-custom-field-value'
 export class ValidateCustomFieldsInterceptor implements NestInterceptor {
     private readonly inputsWithCustomFields: Set<string>;
 
-    constructor(private configService: ConfigService, private moduleRef: ModuleRef) {
+    constructor(
+        private configService: ConfigService,
+        private moduleRef: ModuleRef,
+    ) {
         this.inputsWithCustomFields = Object.keys(configService.customFields).reduce((inputs, entityName) => {
             inputs.add(`Create${entityName}Input`);
             inputs.add(`Update${entityName}Input`);
             return inputs;
         }, new Set<string>());
+        this.inputsWithCustomFields.add('OrderLineCustomFieldsInput');
     }
 
     async intercept(context: ExecutionContext, next: CallHandler<any>) {
@@ -44,7 +46,7 @@ export class ValidateCustomFieldsInterceptor implements NestInterceptor {
             const gqlExecutionContext = GqlExecutionContext.create(context);
             const { operation, schema } = parsedContext.info;
             const variables = gqlExecutionContext.getArgs();
-            const ctx: RequestContext = (parsedContext.req as any)[REQUEST_CONTEXT_KEY];
+            const ctx = internal_getRequestContext(parsedContext.req);
 
             if (operation.operation === 'mutation') {
                 const inputTypeNames = this.getArgumentMap(operation, schema);
@@ -58,7 +60,7 @@ export class ValidateCustomFieldsInterceptor implements NestInterceptor {
                                 : [variables[inputName]];
 
                             for (const inputVariable of inputVariables) {
-                                await this.validateInput(typeName, ctx.languageCode, injector, inputVariable);
+                                await this.validateInput(typeName, ctx, injector, inputVariable);
                             }
                         }
                     }
@@ -70,18 +72,27 @@ export class ValidateCustomFieldsInterceptor implements NestInterceptor {
 
     private async validateInput(
         typeName: string,
-        languageCode: LanguageCode,
+        ctx: RequestContext,
         injector: Injector,
         variableValues?: { [key: string]: any },
     ) {
         if (variableValues) {
             const entityName = typeName.replace(/(Create|Update)(.+)Input/, '$2');
             const customFieldConfig = this.configService.customFields[entityName as keyof CustomFields];
-
+            if (typeName === 'OrderLineCustomFieldsInput') {
+                // special case needed to handle custom fields passed via addItemToOrder or adjustOrderLine
+                // mutations.
+                await this.validateCustomFieldsObject(
+                    this.configService.customFields.OrderLine,
+                    ctx,
+                    variableValues,
+                    injector,
+                );
+            }
             if (variableValues.customFields) {
                 await this.validateCustomFieldsObject(
                     customFieldConfig,
-                    languageCode,
+                    ctx,
                     variableValues.customFields,
                     injector,
                 );
@@ -92,7 +103,7 @@ export class ValidateCustomFieldsInterceptor implements NestInterceptor {
                     if (translation.customFields) {
                         await this.validateCustomFieldsObject(
                             customFieldConfig,
-                            languageCode,
+                            ctx,
                             translation.customFields,
                             injector,
                         );
@@ -104,14 +115,14 @@ export class ValidateCustomFieldsInterceptor implements NestInterceptor {
 
     private async validateCustomFieldsObject(
         customFieldConfig: CustomFieldConfig[],
-        languageCode: LanguageCode,
+        ctx: RequestContext,
         customFieldsObject: { [key: string]: any },
         injector: Injector,
     ) {
         for (const [key, value] of Object.entries(customFieldsObject)) {
             const config = customFieldConfig.find(c => getGraphQlInputName(c) === key);
             if (config) {
-                await validateCustomFieldValue(config, value, injector, languageCode);
+                await validateCustomFieldValue(config, value, injector, ctx);
             }
         }
     }

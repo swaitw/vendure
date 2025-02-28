@@ -9,3 +9,6 @@ load-testing/results/**/*.csv
 load-testing/static/assets
 dev-config-override.ts
 vendure.log
+scripts/dev-test
+custom-admin-ui
+docker-compose.*.yml

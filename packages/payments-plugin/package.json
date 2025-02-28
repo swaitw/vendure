@@ -1,7 +1,7 @@
 {
     "name": "@vendure/payments-plugin",
-    "version": "1.6.5",
-    "license": "MIT",
+    "version": "3.1.4",
+    "license": "GPL-3.0-or-later",
     "main": "package/index.js",
     "types": "package/index.d.ts",
     "files": [
@@ -11,9 +11,12 @@
     "scripts": {
         "watch": "tsc -p ./tsconfig.build.json --watch",
         "build": "rimraf package && tsc -p ./tsconfig.build.json",
-        "e2e": "jest --config ../../e2e-common/jest-config.js --runInBand --package=payments-plugin",
-        "lint": "tslint --fix --project ./",
-        "ci": "yarn build"
+        "e2e": "cross-env PACKAGE=payments-plugin vitest --config ../../e2e-common/vitest.config.mts --run",
+        "e2e:watch": "cross-env PACKAGE=payments-plugin vitest --config ../../e2e-common/vitest.config.mts",
+        "lint": "eslint --fix .",
+        "ci": "npm run build",
+        "dev-server:mollie": "npm run build && DB=sqlite node -r ts-node/register e2e/mollie-dev-server.ts",
+        "dev-server:stripe": "npm run build && DB=sqlite node -r ts-node/register e2e/stripe-dev-server.ts"
     },
     "homepage": "https://www.vendure.io/",
     "funding": "https://github.com/sponsors/michaelbromley",
@@ -23,18 +26,34 @@
     "peerDependencies": {
         "@mollie/api-client": "3.x",
         "braintree": "3.x",
-        "stripe": "8.x"
+        "stripe": "13.x"
+    },
+    "dependencies": {
+        "currency.js": "2.0.4"
+    },
+    "peerDependenciesMeta": {
+        "@mollie/api-client": {
+            "optional": true
+        },
+        "braintree": {
+            "optional": true
+        },
+        "stripe": {
+            "optional": true
+        }
     },
     "devDependencies": {
-        "@mollie/api-client": "^3.6.0",
-        "@types/braintree": "^2.22.15",
-        "@vendure/common": "^1.6.5",
-        "@vendure/core": "^1.6.5",
-        "@vendure/testing": "^1.6.5",
-        "braintree": "^3.0.0",
+        "@mollie/api-client": "^3.7.0",
+        "@types/braintree": "^3.3.11",
+        "@types/localtunnel": "2.0.4",
+        "@vendure/common": "^3.1.4",
+        "@vendure/core": "^3.1.4",
+        "@vendure/testing": "^3.1.4",
+        "braintree": "^3.22.0",
+        "localtunnel": "2.0.2",
         "nock": "^13.1.4",
-        "rimraf": "^3.0.2",
-        "stripe": "^8.197.0",
-        "typescript": "4.3.5"
+        "rimraf": "^5.0.5",
+        "stripe": "^13.3.0",
+        "typescript": "5.1.6"
     }
 }

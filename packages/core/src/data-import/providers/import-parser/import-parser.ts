@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { GlobalFlag, LanguageCode } from '@vendure/common/lib/generated-types';
 import { normalizeString } from '@vendure/common/lib/normalize-string';
 import { unique } from '@vendure/common/lib/unique';
-import parse from 'csv-parse';
+import { parse, Options } from 'csv-parse';
 import { Stream } from 'stream';
 
 import { InternalServerError } from '../../../common/error/errors';
@@ -156,14 +156,14 @@ export class ImportParser {
 
     /**
      * @description
-     * Parses the contents of the [product import CSV file](/docs/developer-guide/importing-product-data/#product-import-format) and
+     * Parses the contents of the [product import CSV file](/guides/developer-guide/importing-data/#product-import-format) and
      * returns a data structure which can then be used to populate Vendure using the {@link FastImporterService}.
      */
     async parseProducts(
         input: string | Stream,
         mainLanguage: LanguageCode = this.configService.defaultLanguageCode,
     ): Promise<ParseResult<ParsedProductWithVariants>> {
-        const options: parse.Options = {
+        const options: Options = {
             trim: true,
             relax_column_count: true,
         };
@@ -190,7 +190,7 @@ export class ImportParser {
                 input.pipe(parser);
                 parser.on('readable', () => {
                     let record;
-                    // tslint:disable-next-line:no-conditional-assignment
+                    // eslint-disable-next-line no-cond-assign
                     while ((record = parser.read())) {
                         records.push(record);
                     }
@@ -514,7 +514,9 @@ function populateOptionGroupValues(currentRow: ParsedProductWithVariants) {
         currentRow.product.optionGroups.forEach((og, i) => {
             const ogTranslation = og.translations.find(t => t.languageCode === translation.languageCode);
             if (!ogTranslation) {
-                throw new InternalServerError(`No translation '${LanguageCode}' for option groups'`);
+                throw new InternalServerError(
+                    `No translation '${translation.languageCode}' for option groups'`,
+                );
             }
             ogTranslation.values = unique(values.map(v => v[i]));
         });
@@ -657,7 +659,7 @@ function isRelationObject(value: string) {
     try {
         const parsed = JSON.parse(value);
         return parsed && parsed.hasOwnProperty('id');
-    } catch (e) {
+    } catch (e: any) {
         return false;
     }
 }

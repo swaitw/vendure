@@ -83,6 +83,8 @@ export const GET_ORDER_PAYMENTS = gql`
     query order($id: ID!) {
         order(id: $id) {
             id
+            state
+            totalWithTax
             payments {
                 id
                 transactionId
@@ -109,6 +111,17 @@ export const CREATE_CHANNEL = gql`
                 errorCode
                 message
             }
+        }
+    }
+`;
+
+export const CREATE_COUPON = gql`
+    mutation CreatePromotion($input: CreatePromotionInput!) {
+        createPromotion(input: $input) {
+            ... on ErrorResult {
+                errorCode
+            }
+            __typename
         }
     }
 `;

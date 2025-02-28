@@ -8,7 +8,7 @@ import {
 } from '@vendure/testing';
 import fs from 'fs-extra';
 import path from 'path';
-import { ConnectionOptions } from 'typeorm';
+import { DataSourceOptions } from 'typeorm';
 
 import { getPackageDir } from './get-package-dir';
 
@@ -34,45 +34,11 @@ registerInitializer('postgres', new PostgresInitializer());
 registerInitializer('mysql', new MysqlInitializer());
 registerInitializer('mariadb', new MysqlInitializer());
 
-/**
- * Increase default timeout in CI because occasionally valid tests fail due to
- * timeouts.
- */
-if (process.env.CI) {
-    jest.setTimeout(30 * 1000);
-} else {
-    jest.setTimeout(15 * 1000);
-}
-
-/**
- * For local debugging of the e2e tests, we set a very long timeout value otherwise tests will
- * automatically fail for going over the 5 second default timeout.
- */
-if (process.env.E2E_DEBUG) {
-    // tslint:disable-next-line:no-console
-    console.log('E2E_DEBUG', process.env.E2E_DEBUG, ' - setting long timeout');
-    jest.setTimeout(1800 * 1000);
-}
-
 export const testConfig = () => {
-    const portsFile = path.join(__dirname, 'ports.json');
-    fs.ensureFileSync(portsFile);
-    let usedPorts: number[];
-    try {
-        usedPorts = fs.readJSONSync(portsFile) ?? [3010];
-    } catch (e) {
-        usedPorts = [3010];
-    }
-    const nextPort = Math.max(...usedPorts) + 1;
-    usedPorts.push(nextPort);
-    if (100 < usedPorts.length) {
-        // reset the used ports after it gets 100 entries long
-        usedPorts = [3010];
-    }
-    fs.writeJSONSync(portsFile, usedPorts);
+    const index = getIndexOfTestFileInParentDir();
     return mergeConfig(defaultTestConfig, {
         apiOptions: {
-            port: nextPort,
+            port: 3010 + index,
         },
         importExportOptions: {
             importAssetsDir: path.join(packageDir, 'fixtures/assets'),
@@ -81,7 +47,46 @@ export const testConfig = () => {
     });
 };
 
-function getDbConfig(): ConnectionOptions {
+/**
+ * Returns the index of the test file in the parent directory.
+ * This is used to ensure each test file has a unique
+ * port number.
+ */
+function getIndexOfTestFileInParentDir() {
+    const testFilePath = getCallerFilename(2);
+    const parentDir = path.dirname(testFilePath);
+    const files = fs.readdirSync(parentDir);
+    const index = files.indexOf(path.basename(testFilePath));
+    return index;
+}
+
+/**
+ * Returns the full path to the file which called the function.
+ * @param depth
+ */
+function getCallerFilename(depth: number): string {
+    let stack: any;
+    let file: any;
+    let frame: any;
+
+    const pst = Error.prepareStackTrace;
+    Error.prepareStackTrace = (_, _stack) => {
+        Error.prepareStackTrace = pst;
+        return _stack;
+    };
+
+    stack = new Error().stack;
+    stack = stack.slice(depth + 1);
+
+    do {
+        frame = stack.shift();
+        file = frame && frame.getFileName();
+    } while (stack.length && file === 'module.js');
+
+    return file;
+}
+
+function getDbConfig(): DataSourceOptions {
     const dbType = process.env.DB || 'sqljs';
     switch (dbType) {
         case 'postgres':
@@ -90,8 +95,8 @@ function getDbConfig(): ConnectionOptions {
                 type: 'postgres',
                 host: '127.0.0.1',
                 port: process.env.CI ? +(process.env.E2E_POSTGRES_PORT || 5432) : 5432,
-                username: 'admin',
-                password: 'secret',
+                username: 'vendure',
+                password: 'password',
             };
         case 'mariadb':
             return {
@@ -99,8 +104,8 @@ function getDbConfig(): ConnectionOptions {
                 type: 'mariadb',
                 host: '127.0.0.1',
                 port: process.env.CI ? +(process.env.E2E_MARIADB_PORT || 3306) : 3306,
-                username: 'root',
-                password: '',
+                username: 'vendure',
+                password: 'password',
             };
         case 'mysql':
             return {
@@ -108,8 +113,8 @@ function getDbConfig(): ConnectionOptions {
                 type: 'mysql',
                 host: '127.0.0.1',
                 port: process.env.CI ? +(process.env.E2E_MYSQL_PORT || 3306) : 3306,
-                username: 'root',
-                password: '',
+                username: 'vendure',
+                password: 'password',
             };
         case 'sqljs':
         default:

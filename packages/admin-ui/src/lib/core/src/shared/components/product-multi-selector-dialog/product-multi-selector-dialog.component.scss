@@ -17,7 +17,7 @@
     grid-template-columns: repeat(auto-fill, 125px);
     grid-template-rows: repeat(auto-fill, 200px);
     grid-gap: 10px 20px;
-    padding-left: 12px;
+    padding-inline-start: 12px;
     padding-top: 12px;
     padding-bottom: 64px;
     overflow-y: auto;
@@ -32,6 +32,7 @@
     margin: 0 3px;
     font-size: 12px;
     line-height: 0.8rem;
+    color: var(--color-text-100);
 }
 
 vdr-select-toggle {
@@ -62,7 +63,8 @@ vdr-select-toggle {
         flex: 1;
         overflow-y: auto;
         .item-row {
-            padding-left: 3px;
+            padding-inline-start: 3px;
+            color: var(--color-text-100);
             &:hover {
                 background-color: var(--color-component-bg-200);
             }
@@ -74,3 +76,4 @@ vdr-select-toggle {
     align-items: center;
     justify-content: space-between;
 }
+

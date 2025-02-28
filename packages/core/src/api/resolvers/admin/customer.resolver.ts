@@ -8,6 +8,7 @@ import {
     MutationDeleteCustomerAddressArgs,
     MutationDeleteCustomerArgs,
     MutationDeleteCustomerNoteArgs,
+    MutationDeleteCustomersArgs,
     MutationUpdateCustomerAddressArgs,
     MutationUpdateCustomerArgs,
     MutationUpdateCustomerNoteArgs,
@@ -22,6 +23,7 @@ import { PaginatedList } from '@vendure/common/lib/shared-types';
 import { ErrorResultUnion } from '../../../common/error/error-result';
 import { Address } from '../../../entity/address/address.entity';
 import { Customer } from '../../../entity/customer/customer.entity';
+import { CustomerGroupService } from '../../../service/services/customer-group.service';
 import { CustomerService } from '../../../service/services/customer.service';
 import { OrderService } from '../../../service/services/order.service';
 import { RequestContext } from '../../common/request-context';
@@ -32,7 +34,11 @@ import { Transaction } from '../../decorators/transaction.decorator';
 
 @Resolver()
 export class CustomerResolver {
-    constructor(private customerService: CustomerService, private orderService: OrderService) {}
+    constructor(
+        private customerService: CustomerService,
+        private customerGroupService: CustomerGroupService,
+        private orderService: OrderService,
+    ) {}
 
     @Query()
     @Allow(Permission.ReadCustomer)
@@ -117,7 +123,24 @@ export class CustomerResolver {
         @Ctx() ctx: RequestContext,
         @Args() args: MutationDeleteCustomerArgs,
     ): Promise<DeletionResponse> {
+        const groups = await this.customerService.getCustomerGroups(ctx, args.id);
+        for (const group of groups) {
+            await this.customerGroupService.removeCustomersFromGroup(ctx, {
+                customerGroupId: group.id,
+                customerIds: [args.id],
+            });
+        }
         return this.customerService.softDelete(ctx, args.id);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.DeleteCustomer)
+    async deleteCustomers(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationDeleteCustomersArgs,
+    ): Promise<DeletionResponse[]> {
+        return Promise.all(args.ids.map(id => this.deleteCustomer(ctx, { id })));
     }
 
     @Transaction()

@@ -25,7 +25,7 @@ export interface DefaultJobQueueOptions {
      * are active, the polling may cause undue load on the database, in which case this value
      * should be increased to e.g. 1000.
      *
-     * @description 200
+     * @default 200
      */
     pollInterval?: number | ((queueName: string) => number);
     /**
@@ -50,7 +50,7 @@ export interface DefaultJobQueueOptions {
      * the job being added.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * setRetries: (queueName, job) => {
      *   if (queueName === 'send-email') {
      *     // Override the default number of retries
@@ -76,16 +76,28 @@ export interface DefaultJobQueueOptions {
      * @since 1.3.0
      */
     useDatabaseForBuffer?: boolean;
+    /**
+     * @description
+     * The timeout in ms which the queue will use when attempting a graceful shutdown.
+     * That means when the server is shut down but a job is running, the job queue will
+     * wait for the job to complete before allowing the server to shut down. If the job
+     * does not complete within this timeout window, the job will be forced to stop
+     * and the server will shut down anyway.
+     *
+     * @since 2.2.0
+     * @default 20_000
+     */
+    gracefulShutdownTimeout?: number;
 }
 
 /**
  * @description
  * A plugin which configures Vendure to use the SQL database to persist the JobQueue jobs using the {@link SqlJobQueueStrategy}. If you add this
- * plugin to an existing Vendure installation, you'll need to run a [database migration](/docs/developer-guide/migrations), since this
+ * plugin to an existing Vendure installation, you'll need to run a [database migration](/guides/developer-guide/migrations), since this
  * plugin will add a new "job_record" table to the database.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { DefaultJobQueuePlugin, VendureConfig } from '\@vendure/core';
  *
  * export const config: VendureConfig = {
@@ -107,7 +119,7 @@ export interface DefaultJobQueueOptions {
  * a pollInterval based on the queue name:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export const config: VendureConfig = {
  *   plugins: [
  *     DefaultJobQueuePlugin.init({
@@ -136,7 +148,7 @@ export interface DefaultJobQueueOptions {
  * exponential backoff may be used which progressively increases the delay between each subsequent retry.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export const config: VendureConfig = {
  *   plugins: [
  *     DefaultJobQueuePlugin.init({
@@ -175,19 +187,21 @@ export interface DefaultJobQueueOptions {
             ? [JobRecord, JobRecordBuffer]
             : [JobRecord],
     configuration: config => {
-        const { pollInterval, concurrency, backoffStrategy, setRetries } =
+        const { pollInterval, concurrency, backoffStrategy, setRetries, gracefulShutdownTimeout } =
             DefaultJobQueuePlugin.options ?? {};
         config.jobQueueOptions.jobQueueStrategy = new SqlJobQueueStrategy({
             concurrency,
             pollInterval,
             backoffStrategy,
             setRetries,
+            gracefulShutdownTimeout,
         });
         if (DefaultJobQueuePlugin.options.useDatabaseForBuffer === true) {
             config.jobQueueOptions.jobBufferStorageStrategy = new SqlJobBufferStorageStrategy();
         }
         return config;
     },
+    compatibility: '>0.0.0',
 })
 export class DefaultJobQueuePlugin {
     /** @internal */

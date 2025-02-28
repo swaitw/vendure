@@ -1,4 +1,4 @@
-import { ConnectionOptions } from 'typeorm';
+import { DataSourceOptions } from 'typeorm';
 import { BaseConnectionOptions } from 'typeorm/connection/BaseConnectionOptions';
 
 /**
@@ -10,7 +10,7 @@ import { BaseConnectionOptions } from 'typeorm/connection/BaseConnectionOptions'
  * it with the {@link registerInitializer} function:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export class CockroachDbInitializer implements TestDbInitializer<CockroachConnectionOptions> {
  *     // database-specific implementation goes here
  * }

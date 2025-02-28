@@ -3,6 +3,7 @@
     [class.has-custom-icon]="!!iconShape"
     class="entry"
     [class.last]="isLast === true"
+    [class.first]="isFirst === true"
     [class.collapsed]="collapsed"
 >
     <div class="timeline" (click)="expandClick.emit()" [title]="timelineTitle | translate">
@@ -21,7 +22,7 @@
                 {{ createdAt | localeDate: 'short' }}
             </div>
             <div class="name">
-                {{ name }}
+                {{ name || '' }}
             </div>
         </div>
         <div [class.featured-entry]="featured">

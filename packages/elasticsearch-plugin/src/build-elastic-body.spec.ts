@@ -1,5 +1,6 @@
 import { LanguageCode, LogicalOperator, SortOrder } from '@vendure/common/lib/generated-types';
 import { DeepRequired } from '@vendure/core';
+import { describe, expect, it } from 'vitest';
 
 import { buildElasticBody } from './build-elastic-body';
 import { defaultOptions, SearchConfig } from './options';
@@ -20,7 +21,8 @@ describe('buildElasticBody()', () => {
                         multi_match: {
                             query: 'test',
                             type: 'best_fields',
-                            fields: ['productName^1', 'productVariantName^1', 'description^1', 'sku^1'],
+                            fuzziness: 'AUTO',
+                            fields: ['productName^5', 'productVariantName^5', 'description^1', 'sku^1'],
                         },
                     },
                 ],
@@ -388,7 +390,8 @@ describe('buildElasticBody()', () => {
                             multi_match: {
                                 query: 'test',
                                 type: 'best_fields',
-                                fields: ['productName^1', 'productVariantName^1', 'description^1', 'sku^1'],
+                                fuzziness: 'AUTO',
+                                fields: ['productName^5', 'productVariantName^5', 'description^1', 'sku^1'],
                             },
                         },
                     ],
@@ -426,7 +429,8 @@ describe('buildElasticBody()', () => {
                         multi_match: {
                             query: 'test',
                             type: 'phrase',
-                            fields: ['productName^1', 'productVariantName^1', 'description^1', 'sku^1'],
+                            fuzziness: 'AUTO',
+                            fields: ['productName^5', 'productVariantName^5', 'description^1', 'sku^1'],
                         },
                     },
                 ],
@@ -455,6 +459,7 @@ describe('buildElasticBody()', () => {
                         multi_match: {
                             query: 'test',
                             type: 'best_fields',
+                            fuzziness: 'AUTO',
                             fields: ['productName^3', 'productVariantName^4', 'description^2', 'sku^5'],
                         },
                     },
@@ -472,7 +477,7 @@ describe('buildElasticBody()', () => {
                         graphQlType: 'String',
                         context: 'both',
                         scriptFn: input => ({
-                            script: `doc['property'].dummyScript(${input.term})`,
+                            script: `doc['property'].dummyScript(${input.term as string})`,
                         }),
                     },
                 },
@@ -481,7 +486,7 @@ describe('buildElasticBody()', () => {
         const result = buildElasticBody({ term: 'test' }, config, CHANNEL_ID, LanguageCode.en);
         expect(result.script_fields).toEqual({
             test: {
-                script: `doc['property'].dummyScript(test)`,
+                script: "doc['property'].dummyScript(test)",
             },
         });
     });

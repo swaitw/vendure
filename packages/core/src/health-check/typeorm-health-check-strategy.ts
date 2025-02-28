@@ -1,6 +1,6 @@
 import { HealthIndicatorFunction, TypeOrmHealthIndicator } from '@nestjs/terminus';
 
-import { Injector } from '../common/index';
+import { Injector } from '../common/injector';
 import { HealthCheckStrategy } from '../config/system/health-check-strategy';
 
 let indicator: TypeOrmHealthIndicator;
@@ -17,17 +17,19 @@ export interface TypeORMHealthCheckOptions {
  * `systemOptions.healthChecks` array:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { TypeORMHealthCheckStrategy } from '\@vendure/core';
  *
  * export const config = {
  *   // ...
- *   systemOptions: [
- *     // The default key is "database" and the default timeout is 1000ms
- *     // Sometimes this is too short and leads to false negatives in the
- *     // /health endpoint.
- *     new TypeORMHealthCheckStrategy({ key: 'postgres-db', timeout: 5000 }),
- *   ]
+ *   systemOptions: {
+ *     healthChecks:[
+ *         // The default key is "database" and the default timeout is 1000ms
+ *         // Sometimes this is too short and leads to false negatives in the
+ *         // /health endpoint.
+ *         new TypeORMHealthCheckStrategy({ key: 'postgres-db', timeout: 5000 }),
+ *     ]
+ *   }
  * }
  * ```
  *

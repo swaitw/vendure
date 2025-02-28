@@ -1,8 +1,8 @@
-/* tslint:disable:no-console */
+/* eslint-disable no-console */
 import { INestApplication } from '@nestjs/common';
 import { bootstrap, JobQueueService } from '@vendure/core';
 import { spawn } from 'child_process';
-import stringify from 'csv-stringify';
+import { stringify } from 'csv-stringify';
 import fs from 'fs';
 import path from 'path';
 
@@ -26,7 +26,7 @@ if (require.main === module) {
         stdio: 'inherit',
     });
 
-    init.on('exit', code => {
+    init.on('exit', async code => {
         if (code === 0) {
             const databaseName = `vendure-load-testing-${count}`;
             return bootstrap(getLoadTestConfig('cookie', databaseName))
@@ -40,7 +40,7 @@ if (require.main === module) {
                     return closeAndExit(app, summaries);
                 })
                 .catch(err => {
-                    // tslint:disable-next-line
+                    // eslint-disable-next-line
                     console.log(err);
                 });
         } else {
@@ -49,7 +49,7 @@ if (require.main === module) {
     });
 }
 
-function runLoadTestScript(script: string): Promise<LoadTestSummary> {
+async function runLoadTestScript(script: string): Promise<LoadTestSummary> {
     const rawResultsFile = `${script}.${count}.json`;
 
     return new Promise((resolve, reject) => {
@@ -112,7 +112,7 @@ async function getTimeSeriesCsvData(summary: LoadTestSummary): Promise<string> {
 
     stringifier.on('readable', () => {
         let row;
-        // tslint:disable-next-line:no-conditional-assignment
+        // eslint-disable-next-line no-cond-assign
         while ((row = stringifier.read())) {
             data.push(row);
         }

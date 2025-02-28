@@ -19,6 +19,7 @@ import { JobQueueService } from '../../job-queue/job-queue.service';
 import { PluginCommonModule } from '../plugin-common.module';
 import { VendurePlugin } from '../vendure-plugin';
 
+import { StockMovementEvent } from '../../event-bus/events/stock-movement-event';
 import { stockStatusExtension } from './api/api-extensions';
 import { AdminFulltextSearchResolver, ShopFulltextSearchResolver } from './api/fulltext-search.resolver';
 import { BUFFER_SEARCH_INDEX_UPDATES, PLUGIN_INIT_OPTIONS } from './constants';
@@ -41,12 +42,12 @@ export interface DefaultSearchReindexResponse extends SearchReindexResponse {
  *
  * The DefaultSearchPlugin is bundled with the `\@vendure/core` package. If you are not using an alternative search
  * plugin, then make sure this one is used, otherwise you will not be able to search products via the
- * [`search` query](/docs/graphql-api/shop/queries#search).
+ * [`search` query](/reference/graphql-api/shop/queries#search).
  *
- * {{% alert "warning" %}}
+ * :::caution
  * Note that the quality of the fulltext search capabilities varies depending on the underlying database being used. For example,
  * the MySQL & Postgres implementations will typically yield better results than the SQLite implementation.
- * {{% /alert %}}
+ * :::
  *
  *
  * @example
@@ -90,6 +91,7 @@ export interface DefaultSearchReindexResponse extends SearchReindexResponse {
         resolvers: [ShopFulltextSearchResolver],
     },
     entities: [SearchIndexItem],
+    compatibility: '>0.0.0',
 })
 export class DefaultSearchPlugin implements OnApplicationBootstrap, OnApplicationShutdown {
     static options: DefaultSearchPluginInitOptions = {};
@@ -163,6 +165,13 @@ export class DefaultSearchPlugin implements OnApplicationBootstrap, OnApplicatio
                     event.channelId,
                 );
             }
+        });
+
+        this.eventBus.ofType(StockMovementEvent).subscribe(event => {
+            return this.searchIndexService.updateVariants(
+                event.ctx,
+                event.stockMovements.map(m => m.productVariant),
+            );
         });
 
         // TODO: Remove this buffering logic because because we have dedicated buffering based on #1137

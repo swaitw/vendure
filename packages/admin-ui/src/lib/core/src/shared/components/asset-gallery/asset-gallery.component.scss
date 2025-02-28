@@ -2,7 +2,10 @@
 
 :host {
     display: flex;
-    overflow: hidden;
+    flex-direction: column-reverse;
+    @media screen and (min-width: $breakpoint-medium) {
+        flex-direction: row;
+    }
 }
 
 .gallery {
@@ -10,12 +13,7 @@
     flex: 1;
     display: grid;
     grid-template-columns: repeat(auto-fill, 150px);
-    grid-template-rows: repeat(auto-fill, 180px);
     grid-gap: 10px 20px;
-    overflow-y: auto;
-    padding-left: 12px;
-    padding-top: 12px;
-    padding-bottom: 12px;
 
     .card:hover {
         box-shadow: 0 0.125rem 0 0 var(--color-primary-500);
@@ -52,18 +50,21 @@ vdr-select-toggle {
 }
 
 .detail {
+    display: flex;
+    align-items: normal;
+    gap: 4px;
+    min-height: 24px;
     font-size: 12px;
     margin: 3px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    vdr-entity-info {
-        height: 16px;
-    }
 }
 
 .info-bar {
-    width: 25%;
+    @media screen and (min-width: $breakpoint-medium) {
+        width: 25%;
+    }
     padding: 0 6px;
     overflow-y: auto;
 
@@ -99,9 +100,9 @@ vdr-select-toggle {
             transition: opacity 0.3s, visibility 0s;
         }
         ul {
-            text-align: left;
+            text-align: start;
             list-style-type: none;
-            margin-left: 12px;
+            margin-inline-start: 12px;
             li {
                 font-size: 12px;
             }

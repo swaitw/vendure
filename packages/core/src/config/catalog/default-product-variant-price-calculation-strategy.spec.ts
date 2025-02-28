@@ -1,3 +1,7 @@
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { roundMoney } from '../../common/round-money';
+import { ProductVariant } from '../../entity/product-variant/product-variant.entity';
 import {
     createRequestContext,
     MockTaxRateService,
@@ -5,20 +9,26 @@ import {
     taxCategoryStandard,
     taxRateDefaultReduced,
     taxRateDefaultStandard,
-    taxRateOtherReduced,
-    taxRateOtherStandard,
     zoneDefault,
     zoneOther,
     zoneWithNoTaxRate,
 } from '../../testing/order-test-utils';
-
-import { DefaultProductVariantPriceCalculationStrategy } from './default-product-variant-price-calculation-strategy';
+import { ensureConfigLoaded } from '../config-helpers';
 
 describe('DefaultProductVariantPriceCalculationStrategy', () => {
-    let strategy: DefaultProductVariantPriceCalculationStrategy;
+    let strategy: import('./default-product-variant-price-calculation-strategy').DefaultProductVariantPriceCalculationStrategy;
     const inputPrice = 6543;
+    const productVariant = new ProductVariant({});
+
+    beforeAll(async () => {
+        await ensureConfigLoaded();
+    });
 
     beforeEach(async () => {
+        // Dynamic import to avoid vitest circular dependency issue
+        const { DefaultProductVariantPriceCalculationStrategy } = await import(
+            './default-product-variant-price-calculation-strategy.js'
+        );
         strategy = new DefaultProductVariantPriceCalculationStrategy();
         const mockInjector = {
             get: () => {
@@ -36,6 +46,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryStandard,
                 activeTaxZone: zoneDefault,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -51,6 +62,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryReduced,
                 activeTaxZone: zoneDefault,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -66,6 +78,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryStandard,
                 activeTaxZone: zoneOther,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -81,6 +94,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryReduced,
                 activeTaxZone: zoneOther,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -96,6 +110,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryReduced,
                 activeTaxZone: zoneWithNoTaxRate,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -113,6 +128,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryStandard,
                 activeTaxZone: zoneDefault,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -128,6 +144,7 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryReduced,
                 activeTaxZone: zoneDefault,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
@@ -143,10 +160,11 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryStandard,
                 activeTaxZone: zoneOther,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
-                price: taxRateDefaultStandard.netPriceOf(inputPrice),
+                price: roundMoney(taxRateDefaultStandard.netPriceOf(inputPrice)),
                 priceIncludesTax: false,
             });
         });
@@ -158,10 +176,11 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryReduced,
                 activeTaxZone: zoneOther,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
-                price: taxRateDefaultReduced.netPriceOf(inputPrice),
+                price: roundMoney(taxRateDefaultReduced.netPriceOf(inputPrice)),
                 priceIncludesTax: false,
             });
         });
@@ -173,10 +192,11 @@ describe('DefaultProductVariantPriceCalculationStrategy', () => {
                 taxCategory: taxCategoryStandard,
                 activeTaxZone: zoneWithNoTaxRate,
                 ctx,
+                productVariant,
             });
 
             expect(result).toEqual({
-                price: taxRateDefaultStandard.netPriceOf(inputPrice),
+                price: roundMoney(taxRateDefaultStandard.netPriceOf(inputPrice)),
                 priceIncludesTax: false,
             });
         });

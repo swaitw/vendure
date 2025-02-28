@@ -3,7 +3,7 @@
   "compilerOptions": {
     "baseUrl": "./",
     "importHelpers": true,
-    "module": "esnext",
+    "module": "es2020",
     "outDir": "./dist/out-tsc",
     "sourceMap": true,
     "declaration": false,
@@ -12,15 +12,17 @@
     "strict": true,
     "noImplicitAny": false,
     "strictPropertyInitialization": false,
-    "target": "es2015",
+    "target": "ES2022",
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
+    "jsx": "react",
     "typeRoots": [],
     "lib": [
-      "es2017",
+      "es2019",
       "dom",
       "esnext.asynciterable"
-    ]
+    ],
+    "useDefineForClassFields": false
   }
 }

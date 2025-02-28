@@ -3,10 +3,10 @@ import { Omit } from '@vendure/common/lib/omit';
 import { ID } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../api/common/request-context';
+import { Surcharge } from '../entity';
 import { Channel } from '../entity/channel/channel.entity';
-import { OrderItem } from '../entity/order-item/order-item.entity';
-import { OrderLine } from '../entity/order-line/order-line.entity';
 import { Order } from '../entity/order/order.entity';
+import { OrderLine } from '../entity/order-line/order-line.entity';
 import { ProductVariant } from '../entity/product-variant/product-variant.entity';
 import { TaxCategory } from '../entity/tax-category/tax-category.entity';
 import { TaxRate } from '../entity/tax-rate/tax-rate.entity';
@@ -20,7 +20,7 @@ export function createOrderFromLines(simpleLines: SimpleLine[]): Order {
             new OrderLine({
                 id: lineId,
                 productVariant: new ProductVariant({ id: productVariantId }),
-                items: Array.from({ length: quantity }).map(() => new OrderItem({})),
+                quantity,
                 ...(customFields ? { customFields } : {}),
             }),
     );
@@ -76,7 +76,9 @@ export const taxRateDefaultStandard = new TaxRate({
     value: 20,
     enabled: true,
     zone: zoneDefault,
+    zoneId: zoneDefault.id,
     category: taxCategoryStandard,
+    categoryId: taxCategoryStandard.id,
 });
 export const taxRateDefaultReduced = new TaxRate({
     id: 'taxRateDefaultReduced',
@@ -84,7 +86,9 @@ export const taxRateDefaultReduced = new TaxRate({
     value: 10,
     enabled: true,
     zone: zoneDefault,
+    zoneId: zoneDefault.id,
     category: taxCategoryReduced,
+    categoryId: taxCategoryReduced.id,
 });
 export const taxRateDefaultZero = new TaxRate({
     id: 'taxRateDefaultZero',
@@ -92,7 +96,9 @@ export const taxRateDefaultZero = new TaxRate({
     value: 0,
     enabled: true,
     zone: zoneDefault,
+    zoneId: zoneDefault.id,
     category: taxCategoryZero,
+    categoryId: taxCategoryZero.id,
 });
 export const taxRateOtherStandard = new TaxRate({
     id: 'taxRateOtherStandard',
@@ -100,7 +106,9 @@ export const taxRateOtherStandard = new TaxRate({
     value: 15,
     enabled: true,
     zone: zoneOther,
+    zoneId: zoneOther.id,
     category: taxCategoryStandard,
+    categoryId: taxCategoryStandard.id,
 });
 export const taxRateOtherReduced = new TaxRate({
     id: 'taxRateOtherReduced',
@@ -108,7 +116,9 @@ export const taxRateOtherReduced = new TaxRate({
     value: 5,
     enabled: true,
     zone: zoneOther,
+    zoneId: zoneOther.id,
     category: taxCategoryReduced,
+    categoryId: taxCategoryReduced.id,
 });
 
 export class MockTaxRateService {
@@ -124,35 +134,38 @@ export class MockTaxRateService {
         /* noop */
     }
 
-    async getApplicableTaxRate(ctx: RequestContext, zone: Zone, taxCategory: TaxCategory): Promise<TaxRate> {
+    async getApplicableTaxRate(
+        ctx: RequestContext,
+        zone: Zone | ID,
+        taxCategory: TaxCategory | ID,
+    ): Promise<TaxRate> {
         const rate = this.activeTaxRates.find(r => r.test(zone, taxCategory));
         return rate || taxRateDefaultStandard;
     }
 }
 
 export function createOrder(
-    orderConfig: Partial<Omit<Order, 'lines'>> & {
+    orderConfig: Partial<Omit<Order, 'lines' | 'surcharges'>> & {
         ctx: RequestContext;
         lines: Array<{
             listPrice: number;
             taxCategory: TaxCategory;
             quantity: number;
         }>;
+        surcharges?: Surcharge[];
     },
 ): Order {
     const lines = orderConfig.lines.map(
         ({ listPrice, taxCategory, quantity }) =>
             new OrderLine({
                 taxCategory,
-                items: Array.from({ length: quantity }).map(
-                    () =>
-                        new OrderItem({
-                            listPrice,
-                            listPriceIncludesTax: orderConfig.ctx.channel.pricesIncludeTax,
-                            taxLines: [],
-                            adjustments: [],
-                        }),
-                ),
+                taxCategoryId: taxCategory.id,
+                quantity,
+                orderPlacedQuantity: 0,
+                listPrice,
+                listPriceIncludesTax: orderConfig.ctx.channel.pricesIncludeTax,
+                taxLines: [],
+                adjustments: [],
             }),
     );
 
@@ -160,7 +173,7 @@ export function createOrder(
         couponCodes: [],
         lines,
         shippingLines: [],
-        surcharges: [],
+        surcharges: orderConfig.surcharges || [],
         modifications: [],
     });
 }

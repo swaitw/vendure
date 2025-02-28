@@ -30,12 +30,15 @@ export class NativeAuthenticationStrategy implements AuthenticationStrategy<Nati
 
     private connection: TransactionalConnection;
     private passwordCipher: import('../../service/helpers/password-cipher/password-cipher').PasswordCipher;
+    private userService: import('../../service/services/user.service').UserService;
 
     async init(injector: Injector) {
         this.connection = injector.get(TransactionalConnection);
-        // This is lazily-loaded to avoid a circular dependency
-        const { PasswordCipher } = await import('../../service/helpers/password-cipher/password-cipher');
+        // These are lazily-loaded to avoid a circular dependency
+        const { PasswordCipher } = await import('../../service/helpers/password-cipher/password-cipher.js');
+        const { UserService } = await import('../../service/services/user.service.js');
         this.passwordCipher = injector.get(PasswordCipher);
+        this.userService = injector.get(UserService);
     }
 
     defineInputType(): DocumentNode {
@@ -48,7 +51,7 @@ export class NativeAuthenticationStrategy implements AuthenticationStrategy<Nati
     }
 
     async authenticate(ctx: RequestContext, data: NativeAuthenticationData): Promise<User | false> {
-        const user = await this.getUserFromIdentifier(ctx, data.username);
+        const user = await this.userService.getUserByEmailAddress(ctx, data.username);
         if (!user) {
             return false;
         }
@@ -59,31 +62,27 @@ export class NativeAuthenticationStrategy implements AuthenticationStrategy<Nati
         return user;
     }
 
-    private getUserFromIdentifier(ctx: RequestContext, identifier: string): Promise<User | undefined> {
-        return this.connection.getRepository(ctx, User).findOne({
-            where: { identifier, deletedAt: null },
-            relations: ['roles', 'roles.channels'],
-        });
-    }
-
     /**
      * Verify the provided password against the one we have for the given user.
      */
     async verifyUserPassword(ctx: RequestContext, userId: ID, password: string): Promise<boolean> {
-        const user = await this.connection.getRepository(ctx, User).findOne(userId, {
+        const user = await this.connection.getRepository(ctx, User).findOne({
+            where: { id: userId },
             relations: ['authenticationMethods'],
         });
         if (!user) {
             return false;
         }
-        const nativeAuthMethod = user.getNativeAuthenticationMethod();
+        const nativeAuthMethod = user.getNativeAuthenticationMethod(false);
+        if (!nativeAuthMethod) {
+            return false;
+        }
         const pw =
             (
-                await this.connection
-                    .getRepository(ctx, NativeAuthenticationMethod)
-                    .findOne(nativeAuthMethod.id, {
-                        select: ['passwordHash'],
-                    })
+                await this.connection.getRepository(ctx, NativeAuthenticationMethod).findOne({
+                    where: { id: nativeAuthMethod.id },
+                    select: ['passwordHash'],
+                })
             )?.passwordHash ?? '';
         const passwordMatches = await this.passwordCipher.check(password, pw);
         if (!passwordMatches) {

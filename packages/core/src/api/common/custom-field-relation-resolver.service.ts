@@ -3,7 +3,6 @@ import { ID } from '@vendure/common/lib/shared-types';
 import { FindOptionsUtils } from 'typeorm/find-options/FindOptionsUtils';
 
 import { Translatable } from '../../common/types/locale-types';
-import { ConfigService } from '../../config/config.service';
 import { RelationCustomFieldConfig } from '../../config/custom-field/custom-field-types';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { VendureEntity } from '../../entity/base/base.entity';
@@ -24,11 +23,9 @@ export interface ResolveRelationConfig {
 export class CustomFieldRelationResolverService {
     constructor(
         private connection: TransactionalConnection,
-        private configService: ConfigService,
         private productPriceApplicator: ProductPriceApplicator,
         private translator: TranslatorService,
-    ) {
-    }
+    ) {}
 
     /**
      * @description
@@ -51,10 +48,20 @@ export class CustomFieldRelationResolverService {
             .createQueryBuilder('relation')
             .where(`relation.id IN (${subQb.getQuery()})`)
             .setParameters({ id: entityId });
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         FindOptionsUtils.joinEagerRelations(qb, qb.alias, qb.expressionMap.mainAlias!.metadata);
 
         const result = fieldDef.list ? await qb.getMany() : await qb.getOne();
+
+        return await this.translateEntity(ctx, result, fieldDef);
+    }
+
+    async translateEntity(
+        ctx: RequestContext,
+        result: VendureEntity | VendureEntity[] | null,
+        fieldDef: RelationCustomFieldConfig,
+    ) {
+        if (result == null) return null;
 
         if (fieldDef.entity === ProductVariant) {
             if (Array.isArray(result)) {
@@ -65,10 +72,10 @@ export class CustomFieldRelationResolverService {
         }
 
         const translated: any = Array.isArray(result)
-            ? result.map(r => (this.isTranslatable(r) ? this.translator.translate(r,ctx) : r))
+            ? result.map(r => (this.isTranslatable(r) ? this.translator.translate(r, ctx) : r))
             : this.isTranslatable(result)
-                ? this.translator.translate(result,ctx)
-                : result;
+              ? this.translator.translate(result, ctx)
+              : result;
 
         return translated;
     }

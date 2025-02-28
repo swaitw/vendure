@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { LanguageCode, Permission } from '@vendure/common/lib/generated-types';
+import { CurrencyCode, LanguageCode, Permission } from '@vendure/common/lib/generated-types';
 import { ID } from '@vendure/common/lib/shared-types';
 import { Request } from 'express';
 import { GraphQLResolveInfo } from 'graphql';
@@ -7,11 +7,12 @@ import ms from 'ms';
 
 import { ApiType, getApiType } from '../../../api/common/get-api-type';
 import { RequestContext } from '../../../api/common/request-context';
+import { UserInputError } from '../../../common/error/errors';
 import { idsAreEqual } from '../../../common/utils';
 import { ConfigService } from '../../../config/config.service';
 import { CachedSession, CachedSessionUser } from '../../../config/session-cache/session-cache-strategy';
 import { Channel } from '../../../entity/channel/channel.entity';
-import { User } from '../../../entity/index';
+import { User } from '../../../entity/user/user.entity';
 import { ChannelService } from '../../services/channel.service';
 import { getUserChannelsPermissions } from '../utils/get-user-channels-permissions';
 
@@ -24,7 +25,10 @@ import { getUserChannelsPermissions } from '../utils/get-user-channels-permissio
 @Injectable()
 export class RequestContextService {
     /** @internal */
-    constructor(private channelService: ChannelService, private configService: ConfigService) {}
+    constructor(
+        private channelService: ChannelService,
+        private configService: ConfigService,
+    ) {}
 
     /**
      * @description
@@ -39,10 +43,11 @@ export class RequestContextService {
         apiType: ApiType;
         channelOrToken?: Channel | string;
         languageCode?: LanguageCode;
+        currencyCode?: CurrencyCode;
         user?: User;
         activeOrderId?: ID;
     }): Promise<RequestContext> {
-        const { req, apiType, channelOrToken, languageCode, user, activeOrderId } = config;
+        const { req, apiType, channelOrToken, languageCode, currencyCode, user, activeOrderId } = config;
         let channel: Channel;
         if (channelOrToken instanceof Channel) {
             channel = channelOrToken;
@@ -73,6 +78,7 @@ export class RequestContextService {
             apiType,
             channel,
             languageCode,
+            currencyCode,
             session,
             isAuthorized: true,
             authorizedAsOwnerOnly: false,
@@ -97,6 +103,7 @@ export class RequestContextService {
 
         const hasOwnerPermission = !!requiredPermissions && requiredPermissions.includes(Permission.Owner);
         const languageCode = this.getLanguageCode(req, channel);
+        const currencyCode = this.getCurrencyCode(req, channel);
         const user = session && session.user;
         const isAuthorized = this.userHasRequiredPermissionsOnChannel(requiredPermissions, channel, user);
         const authorizedAsOwnerOnly = !isAuthorized && hasOwnerPermission;
@@ -106,6 +113,7 @@ export class RequestContextService {
             apiType,
             channel,
             languageCode,
+            currencyCode,
             session,
             isAuthorized,
             authorizedAsOwnerOnly,
@@ -131,6 +139,16 @@ export class RequestContextService {
             channel.defaultLanguageCode ??
             this.configService.defaultLanguageCode
         );
+    }
+
+    private getCurrencyCode(req: Request, channel: Channel): CurrencyCode | undefined {
+        const queryCurrencyCode = req.query && (req.query.currencyCode as CurrencyCode);
+        if (queryCurrencyCode && !channel.availableCurrencyCodes.includes(queryCurrencyCode)) {
+            throw new UserInputError('error.currency-not-available-in-channel', {
+                currencyCode: queryCurrencyCode,
+            });
+        }
+        return queryCurrencyCode ?? channel.defaultCurrencyCode;
     }
 
     /**

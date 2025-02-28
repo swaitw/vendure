@@ -34,6 +34,8 @@ import { BullMQPluginOptions } from './types';
  *
  * `npm install \@vendure/job-queue-plugin bullmq`
  *
+ * **Note:** The v1.x version of this plugin is designed to work with bullmq v1.x, etc.
+ *
  * @example
  * ```ts
  * import { BullMQJobQueuePlugin } from '\@vendure/job-queue-plugin/package/bullmq';
@@ -41,6 +43,7 @@ import { BullMQPluginOptions } from './types';
  * const config: VendureConfig = {
  *   // Add an instance of the plugin to the plugins array
  *   plugins: [
+ *     // DefaultJobQueuePlugin should be removed from the plugins array
  *     BullMQJobQueuePlugin.init({
  *       connection: {
  *         port: 6379
@@ -83,7 +86,7 @@ import { BullMQPluginOptions } from './types';
  * You can change the concurrency in the `workerOptions` passed to the `init()` method:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * const config: VendureConfig = {
  *   plugins: [
  *     BullMQJobQueuePlugin.init({
@@ -95,7 +98,38 @@ import { BullMQPluginOptions } from './types';
  * };
  * ```
  *
- * @docsCategory job-queue-plugin
+ * ## Removing old jobs
+ *
+ * By default, BullMQ will keep completed jobs in the `completed` set and failed jobs in the `failed` set. Over time,
+ * these sets can grow very large. Since Vendure v2.1, the default behaviour is to remove jobs from these sets after
+ * 30 days or after a maximum of 5,000 completed or failed jobs.
+ *
+ * This can be configured using the `removeOnComplete` and `removeOnFail` options:
+ *
+ * @example
+ * ```ts
+ * const config: VendureConfig = {
+ *   plugins: [
+ *     BullMQJobQueuePlugin.init({
+ *       workerOptions: {
+ *         removeOnComplete: {
+ *           count: 500,
+ *         },
+ *         removeOnFail: {
+ *           age: 60 * 60 * 24 * 7, // 7 days
+ *           count: 1000,
+ *         },
+ *       }
+ *     }),
+ *   ],
+ * };
+ * ```
+ *
+ * The `count` option specifies the maximum number of jobs to keep in the set, while the `age` option specifies the
+ * maximum age of a job in seconds. If both options are specified, then the jobs kept will be the ones that satisfy
+ * both properties.
+ *
+ * @docsCategory core plugins/JobQueuePlugin
  */
 @VendurePlugin({
     imports: [PluginCommonModule],
@@ -109,6 +143,7 @@ import { BullMQPluginOptions } from './types';
         { provide: BULLMQ_PLUGIN_OPTIONS, useFactory: () => BullMQJobQueuePlugin.options },
         RedisHealthIndicator,
     ],
+    compatibility: '^3.0.0',
 })
 export class BullMQJobQueuePlugin {
     static options: BullMQPluginOptions;

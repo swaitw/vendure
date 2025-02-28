@@ -13,17 +13,18 @@ import { debounceTime, delay, finalize, map, take as rxjsTake, takeUntil, tap } 
 
 import {
     Asset,
-    CreateAssets,
-    GetAssetList,
+    GetAssetListQuery,
+    GetAssetListQueryVariables,
     LogicalOperator,
     SortOrder,
     TagFragment,
 } from '../../../common/generated-types';
 import { DataService } from '../../../data/providers/data.service';
 import { QueryResult } from '../../../data/query-result';
-import { Dialog } from '../../../providers/modal/modal.service';
+import { Dialog } from '../../../providers/modal/modal.types';
 import { NotificationService } from '../../../providers/notification/notification.service';
 import { AssetGalleryComponent } from '../asset-gallery/asset-gallery.component';
+import { AssetLike } from '../asset-gallery/asset-gallery.types';
 import { AssetSearchInputComponent } from '../asset-search-input/asset-search-input.component';
 
 /**
@@ -31,7 +32,7 @@ import { AssetSearchInputComponent } from '../asset-search-input/asset-search-in
  * A dialog which allows the creation and selection of assets.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * selectAssets() {
  *   this.modalService
  *     .fromComponent(AssetPickerDialogComponent, {
@@ -54,7 +55,7 @@ import { AssetSearchInputComponent } from '../asset-search-input/asset-search-in
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AssetPickerDialogComponent implements OnInit, AfterViewInit, OnDestroy, Dialog<Asset[]> {
-    assets$: Observable<GetAssetList.Items[]>;
+    assets$: Observable<AssetLike[]>;
     allTags$: Observable<TagFragment[]>;
     paginationConfig: PaginationInstance = {
         currentPage: 1,
@@ -74,10 +75,13 @@ export class AssetPickerDialogComponent implements OnInit, AfterViewInit, OnDest
     searchTerm$ = new BehaviorSubject<string | undefined>(undefined);
     filterByTags$ = new BehaviorSubject<TagFragment[] | undefined>(undefined);
     uploading = false;
-    private listQuery: QueryResult<GetAssetList.Query, GetAssetList.Variables>;
+    private listQuery: QueryResult<GetAssetListQuery, GetAssetListQueryVariables>;
     private destroy$ = new Subject<void>();
 
-    constructor(private dataService: DataService, private notificationService: NotificationService) {}
+    constructor(
+        private dataService: DataService,
+        private notificationService: NotificationService,
+    ) {}
 
     ngOnInit() {
         this.listQuery = this.dataService.product.getAssetList(this.paginationConfig.itemsPerPage, 0);
@@ -141,9 +145,7 @@ export class AssetPickerDialogComponent implements OnInit, AfterViewInit, OnDest
                     this.notificationService.success(_('asset.notify-create-assets-success'), {
                         count: files.length,
                     });
-                    const assets = res.createAssets.filter(
-                        a => a.__typename === 'Asset',
-                    ) as CreateAssets.AssetInlineFragment[];
+                    const assets = res.createAssets.filter(a => a.__typename === 'Asset') as AssetLike[];
                     this.assetGalleryComponent.selectMultiple(assets);
                 });
         }

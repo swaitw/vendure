@@ -2,13 +2,16 @@ import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import {
     AddFulfillmentToOrderResult,
     CancelOrderResult,
+    CancelPaymentResult,
     MutationAddFulfillmentToOrderArgs,
     MutationAddManualPaymentToOrderArgs,
     MutationAddNoteToOrderArgs,
     MutationCancelOrderArgs,
+    MutationCancelPaymentArgs,
     MutationDeleteOrderNoteArgs,
     MutationModifyOrderArgs,
     MutationRefundOrderArgs,
+    MutationSetOrderCustomerArgs,
     MutationSetOrderCustomFieldsArgs,
     MutationSettlePaymentArgs,
     MutationSettleRefundArgs,
@@ -24,9 +27,9 @@ import {
     TransitionPaymentToStateResult,
 } from '@vendure/common/lib/generated-types';
 import { PaginatedList } from '@vendure/common/lib/shared-types';
-import { TransactionalConnection } from '../../../connection';
 
 import { ErrorResultUnion, isGraphQlErrorResult } from '../../../common/error/error-result';
+import { TransactionalConnection } from '../../../connection';
 import { Fulfillment } from '../../../entity/fulfillment/fulfillment.entity';
 import { Order } from '../../../entity/order/order.entity';
 import { Payment } from '../../../entity/payment/payment.entity';
@@ -44,8 +47,8 @@ import { Transaction } from '../../decorators/transaction.decorator';
 @Resolver()
 export class OrderResolver {
     constructor(
-        private orderService: OrderService, 
-        private connection: TransactionalConnection
+        private orderService: OrderService,
+        private connection: TransactionalConnection,
     ) {}
 
     @Query()
@@ -63,7 +66,8 @@ export class OrderResolver {
     async order(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         return this.orderService.findOne(ctx, args.id, relations);
     }
@@ -76,6 +80,16 @@ export class OrderResolver {
         @Args() args: MutationSettlePaymentArgs,
     ): Promise<ErrorResultUnion<SettlePaymentResult, Payment>> {
         return this.orderService.settlePayment(ctx, args.id);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.UpdateOrder)
+    async cancelPayment(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationCancelPaymentArgs,
+    ): Promise<ErrorResultUnion<CancelPaymentResult, Payment>> {
+        return this.orderService.cancelPayment(ctx, args.id);
     }
 
     @Transaction()
@@ -146,6 +160,13 @@ export class OrderResolver {
     @Transaction()
     @Mutation()
     @Allow(Permission.UpdateOrder)
+    async setOrderCustomer(@Ctx() ctx: RequestContext, @Args() { input }: MutationSetOrderCustomerArgs) {
+        return this.orderService.updateOrderCustomer(ctx, input);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.UpdateOrder)
     async transitionOrderToState(
         @Ctx() ctx: RequestContext,
         @Args() args: MutationTransitionOrderToStateArgs,
@@ -186,7 +207,7 @@ export class OrderResolver {
             await this.connection.commitOpenTransaction(ctx);
         }
 
-        return result
+        return result;
     }
 
     @Transaction()

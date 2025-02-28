@@ -63,7 +63,7 @@ export class ShopProductsResolver {
         } else if (args.slug) {
             result = await this.productService.findOneBySlug(ctx, args.slug, relations);
         } else {
-            throw new UserInputError(`error.product-id-or-slug-must-be-provided`);
+            throw new UserInputError('error.product-id-or-slug-must-be-provided');
         }
         if (!result) {
             return;
@@ -79,7 +79,10 @@ export class ShopProductsResolver {
     async collections(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryCollectionsArgs,
-        @Relations({ entity: Collection, omit: ['productVariants', 'assets'] })
+        @Relations({
+            entity: Collection,
+            omit: ['productVariants', 'assets', 'parent.productVariants', 'children.productVariants'],
+        })
         relations: RelationPaths<Collection>,
     ): Promise<PaginatedList<Translated<Collection>>> {
         const options: ListQueryOptions<Collection> = {
@@ -96,19 +99,22 @@ export class ShopProductsResolver {
     async collection(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryCollectionArgs,
-        @Relations({ entity: Collection, omit: ['productVariants', 'assets'] })
+        @Relations({
+            entity: Collection,
+            omit: ['productVariants', 'assets', 'parent.productVariants', 'children.productVariants'],
+        })
         relations: RelationPaths<Collection>,
     ): Promise<Translated<Collection> | undefined> {
         let collection: Translated<Collection> | undefined;
         if (args.id) {
             collection = await this.collectionService.findOne(ctx, args.id, relations);
             if (args.slug && collection && collection.slug !== args.slug) {
-                throw new UserInputError(`error.collection-id-slug-mismatch`);
+                throw new UserInputError('error.collection-id-slug-mismatch');
             }
         } else if (args.slug) {
             collection = await this.collectionService.findOneBySlug(ctx, args.slug, relations);
         } else {
-            throw new UserInputError(`error.collection-id-or-slug-must-be-provided`);
+            throw new UserInputError('error.collection-id-or-slug-must-be-provided');
         }
         if (collection && collection.isPrivate) {
             return;
@@ -118,7 +124,7 @@ export class ShopProductsResolver {
 
     @Query()
     async search(...args: any): Promise<Omit<SearchResponse, 'facetValues'>> {
-        throw new InternalServerError(`error.no-search-plugin-configured`);
+        throw new InternalServerError('error.no-search-plugin-configured');
     }
 
     @Query()

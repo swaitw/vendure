@@ -5,25 +5,26 @@ import {
     CreateProductOptionInput,
     CreateProductVariantInput,
 } from '@vendure/common/lib/generated-types';
+import { normalizeString } from '@vendure/common/lib/normalize-string';
 import { ID } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
 
 import { RequestContext } from '../../../api/common/request-context';
 import { TransactionalConnection } from '../../../connection/transactional-connection';
 import { Channel } from '../../../entity/channel/channel.entity';
-import { ProductOptionGroupTranslation } from '../../../entity/product-option-group/product-option-group-translation.entity';
-import { ProductOptionGroup } from '../../../entity/product-option-group/product-option-group.entity';
+import { ProductAsset } from '../../../entity/product/product-asset.entity';
+import { ProductTranslation } from '../../../entity/product/product-translation.entity';
+import { Product } from '../../../entity/product/product.entity';
 import { ProductOptionTranslation } from '../../../entity/product-option/product-option-translation.entity';
 import { ProductOption } from '../../../entity/product-option/product-option.entity';
+import { ProductOptionGroupTranslation } from '../../../entity/product-option-group/product-option-group-translation.entity';
+import { ProductOptionGroup } from '../../../entity/product-option-group/product-option-group.entity';
 import { ProductVariantAsset } from '../../../entity/product-variant/product-variant-asset.entity';
 import { ProductVariantPrice } from '../../../entity/product-variant/product-variant-price.entity';
 import { ProductVariantTranslation } from '../../../entity/product-variant/product-variant-translation.entity';
 import { ProductVariant } from '../../../entity/product-variant/product-variant.entity';
-import { ProductAsset } from '../../../entity/product/product-asset.entity';
-import { ProductTranslation } from '../../../entity/product/product-translation.entity';
-import { Product } from '../../../entity/product/product.entity';
+import { RequestContextService } from '../../../service/helpers/request-context/request-context.service';
 import { TranslatableSaver } from '../../../service/helpers/translatable-saver/translatable-saver';
-import { RequestContextService } from '../../../service/index';
 import { ChannelService } from '../../../service/services/channel.service';
 import { StockMovementService } from '../../../service/services/stock-movement.service';
 
@@ -71,6 +72,11 @@ export class FastImporterService {
 
     async createProduct(input: CreateProductInput): Promise<ID> {
         this.ensureInitialized();
+        // https://github.com/vendure-ecommerce/vendure/issues/2053
+        // normalizes slug without validation for faster performance
+        input.translations.map(translation => {
+            translation.slug = normalizeString(translation.slug as string, '-');
+        });
         const product = await this.translatableSaver.create({
             ctx: this.importCtx,
             input,
@@ -95,7 +101,9 @@ export class FastImporterService {
                         position: i,
                     }),
             );
-            await this.connection.getRepository(this.importCtx, ProductAsset).save(productAssets, { reload: false });
+            await this.connection
+                .getRepository(this.importCtx, ProductAsset)
+                .save(productAssets, { reload: false });
         }
         return product.id;
     }
@@ -177,24 +185,26 @@ export class FastImporterService {
                         position: i,
                     }),
             );
-            await this.connection.getRepository(this.importCtx, ProductVariantAsset).save(variantAssets, { reload: false });
+            await this.connection
+                .getRepository(this.importCtx, ProductVariantAsset)
+                .save(variantAssets, { reload: false });
         }
-        if (input.stockOnHand != null && input.stockOnHand !== 0) {
-            await this.stockMovementService.adjustProductVariantStock(
-                this.importCtx,
-                createdVariant.id,
-                0,
-                input.stockOnHand,
-            );
-        }
+        await this.stockMovementService.adjustProductVariantStock(
+            this.importCtx,
+            createdVariant.id,
+            input.stockOnHand ?? 0,
+        );
         const assignedChannelIds = unique([this.defaultChannel, this.importCtx.channel], 'id').map(c => c.id);
         for (const channelId of assignedChannelIds) {
             const variantPrice = new ProductVariantPrice({
                 price: input.price,
                 channelId,
+                currencyCode: this.defaultChannel.defaultCurrencyCode,
             });
             variantPrice.variant = createdVariant;
-            await this.connection.getRepository(this.importCtx, ProductVariantPrice).save(variantPrice, { reload: false });
+            await this.connection
+                .getRepository(this.importCtx, ProductVariantPrice)
+                .save(variantPrice, { reload: false });
         }
 
         return createdVariant.id;
@@ -203,7 +213,7 @@ export class FastImporterService {
     private ensureInitialized() {
         if (!this.defaultChannel || !this.importCtx) {
             throw new Error(
-                `The FastImporterService must be initialized with a call to 'initialize()' before importing data`,
+                "The FastImporterService must be initialized with a call to 'initialize()' before importing data",
             );
         }
     }

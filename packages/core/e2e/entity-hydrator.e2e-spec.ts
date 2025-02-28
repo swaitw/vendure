@@ -1,15 +1,39 @@
-/* tslint:disable:no-non-null-assertion */
-import { mergeConfig, Order, Product, ProductVariant } from '@vendure/core';
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import {
+    Asset,
+    ChannelService,
+    EntityHydrator,
+    mergeConfig,
+    Order,
+    Product,
+    ProductVariant,
+    RequestContext,
+    ActiveOrderService,
+    OrderService,
+    TransactionalConnection,
+    OrderLine,
+    RequestContextService,
+} from '@vendure/core';
 import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
 import gql from 'graphql-tag';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
 import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
 
-import { HydrationTestPlugin } from './fixtures/test-plugins/hydration-test-plugin';
-import { UpdateChannel } from './graphql/generated-e2e-admin-types';
-import { AddItemToOrder, UpdatedOrderFragment } from './graphql/generated-e2e-shop-types';
+import {
+    AdditionalConfig,
+    HydrationTestPlugin,
+    TreeEntity,
+} from './fixtures/test-plugins/hydration-test-plugin';
+import { UpdateChannelMutation, UpdateChannelMutationVariables } from './graphql/generated-e2e-admin-types';
+import {
+    AddItemToOrderDocument,
+    AddItemToOrderMutation,
+    AddItemToOrderMutationVariables,
+    UpdatedOrderFragment,
+} from './graphql/generated-e2e-shop-types';
 import { UPDATE_CHANNEL } from './graphql/shared-definitions';
 import { ADD_ITEM_TO_ORDER } from './graphql/shop-definitions';
 
@@ -28,9 +52,23 @@ describe('Entity hydration', () => {
         await server.init({
             initialData,
             productsCsvPath: path.join(__dirname, 'fixtures/e2e-products-full.csv'),
-            customerCount: 1,
+            customerCount: 2,
         });
         await adminClient.asSuperAdmin();
+
+        const connection = server.app.get(TransactionalConnection).rawConnection;
+        const asset = await connection.getRepository(Asset).findOne({ where: {} });
+        const additionalConfig = await connection.getRepository(AdditionalConfig).save(
+            new AdditionalConfig({
+                backgroundImage: asset,
+            }),
+        );
+        const parent = await connection
+            .getRepository(TreeEntity)
+            .save(new TreeEntity({ additionalConfig, image1: asset, image2: asset }));
+        await connection
+            .getRepository(TreeEntity)
+            .save(new TreeEntity({ parent, image1: asset, image2: asset }));
     }, TEST_SETUP_TIMEOUT_MS);
 
     afterAll(async () => {
@@ -162,13 +200,13 @@ describe('Entity hydration', () => {
 
     // https://github.com/vendure-ecommerce/vendure/issues/1172
     it('can hydrate entity with getters (Order)', async () => {
-        const { addItemToOrder } = await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(
-            ADD_ITEM_TO_ORDER,
-            {
-                productVariantId: 'T_1',
-                quantity: 1,
-            },
-        );
+        const { addItemToOrder } = await shopClient.query<
+            AddItemToOrderMutation,
+            AddItemToOrderMutationVariables
+        >(ADD_ITEM_TO_ORDER, {
+            productVariantId: 'T_1',
+            quantity: 1,
+        });
         orderResultGuard.assertSuccess(addItemToOrder);
 
         const { hydrateOrder } = await adminClient.query<{ hydrateOrder: Order }>(GET_HYDRATED_ORDER, {
@@ -182,13 +220,13 @@ describe('Entity hydration', () => {
     // https://github.com/vendure-ecommerce/vendure/issues/1229
     it('deep merges existing properties', async () => {
         await shopClient.asAnonymousUser();
-        const { addItemToOrder } = await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(
-            ADD_ITEM_TO_ORDER,
-            {
-                productVariantId: 'T_1',
-                quantity: 2,
-            },
-        );
+        const { addItemToOrder } = await shopClient.query<
+            AddItemToOrderMutation,
+            AddItemToOrderMutationVariables
+        >(ADD_ITEM_TO_ORDER, {
+            productVariantId: 'T_1',
+            quantity: 2,
+        });
         orderResultGuard.assertSuccess(addItemToOrder);
 
         const { hydrateOrderReturnQuantities } = await adminClient.query<{
@@ -202,7 +240,7 @@ describe('Entity hydration', () => {
 
     // https://github.com/vendure-ecommerce/vendure/issues/1284
     it('hydrates custom field relations', async () => {
-        await adminClient.query<UpdateChannel.Mutation, UpdateChannel.Variables>(UPDATE_CHANNEL, {
+        await adminClient.query<UpdateChannelMutation, UpdateChannelMutationVariables>(UPDATE_CHANNEL, {
             input: {
                 id: 'T_1',
                 customFields: {
@@ -219,6 +257,169 @@ describe('Entity hydration', () => {
 
         expect(hydrateChannel.customFields.thumb).toBeDefined();
         expect(hydrateChannel.customFields.thumb.id).toBe('T_2');
+    });
+
+    it('hydrates a nested custom field', async () => {
+        await adminClient.query<UpdateChannelMutation, UpdateChannelMutationVariables>(UPDATE_CHANNEL, {
+            input: {
+                id: 'T_1',
+                customFields: {
+                    additionalConfigId: 'T_1',
+                },
+            },
+        });
+
+        const { hydrateChannelWithNestedRelation } = await adminClient.query<{
+            hydrateChannelWithNestedRelation: any;
+        }>(GET_HYDRATED_CHANNEL_NESTED, {
+            id: 'T_1',
+        });
+
+        expect(hydrateChannelWithNestedRelation.customFields.additionalConfig).toBeDefined();
+    });
+
+    // https://github.com/vendure-ecommerce/vendure/issues/2682
+    it('hydrates a nested custom field where the first level is null', async () => {
+        await adminClient.query<UpdateChannelMutation, UpdateChannelMutationVariables>(UPDATE_CHANNEL, {
+            input: {
+                id: 'T_1',
+                customFields: {
+                    additionalConfigId: null,
+                },
+            },
+        });
+
+        const { hydrateChannelWithNestedRelation } = await adminClient.query<{
+            hydrateChannelWithNestedRelation: any;
+        }>(GET_HYDRATED_CHANNEL_NESTED, {
+            id: 'T_1',
+        });
+
+        expect(hydrateChannelWithNestedRelation.customFields.additionalConfig).toBeNull();
+    });
+
+    // https://github.com/vendure-ecommerce/vendure/issues/2013
+    describe('hydration of OrderLine ProductVariantPrices', () => {
+        let order: Order | undefined;
+
+        it('Create order with 3 items', async () => {
+            await shopClient.asUserWithCredentials('hayden.zieme12@hotmail.com', 'test');
+            await shopClient.query(AddItemToOrderDocument, {
+                productVariantId: '1',
+                quantity: 1,
+            });
+            await shopClient.query(AddItemToOrderDocument, {
+                productVariantId: '2',
+                quantity: 1,
+            });
+            const { addItemToOrder } = await shopClient.query(AddItemToOrderDocument, {
+                productVariantId: '3',
+                quantity: 1,
+            });
+            orderResultGuard.assertSuccess(addItemToOrder);
+            const channel = await server.app.get(ChannelService).getDefaultChannel();
+            // This is ugly, but in our real life example we use a CTX constructed by Vendure
+            const internalOrderId = +addItemToOrder.id.replace(/^\D+/g, '');
+            const ctx = new RequestContext({
+                channel,
+                authorizedAsOwnerOnly: true,
+                apiType: 'shop',
+                isAuthorized: true,
+                session: {
+                    activeOrderId: internalOrderId,
+                    activeChannelId: 1,
+                    user: {
+                        id: 2,
+                    },
+                } as any,
+            });
+            order = await server.app.get(ActiveOrderService).getActiveOrder(ctx, undefined);
+            await server.app.get(EntityHydrator).hydrate(ctx, order!, {
+                relations: ['lines.productVariant'],
+                applyProductVariantPrices: true,
+            });
+        });
+
+        it('Variant of orderLine 1 has a price', async () => {
+            expect(order!.lines[0].productVariant.priceWithTax).toBeGreaterThan(0);
+        });
+
+        it('Variant of orderLine 2 has a price', async () => {
+            expect(order!.lines[1].productVariant.priceWithTax).toBeGreaterThan(0);
+        });
+
+        it('Variant of orderLine 3 has a price', async () => {
+            expect(order!.lines[1].productVariant.priceWithTax).toBeGreaterThan(0);
+        });
+    });
+
+    // https://github.com/vendure-ecommerce/vendure/issues/2546
+    it('Preserves ordering when merging arrays of relations', async () => {
+        await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
+        await shopClient.query(AddItemToOrderDocument, {
+            productVariantId: '1',
+            quantity: 1,
+        });
+        const { addItemToOrder } = await shopClient.query(AddItemToOrderDocument, {
+            productVariantId: '2',
+            quantity: 2,
+        });
+        orderResultGuard.assertSuccess(addItemToOrder);
+        const internalOrderId = +addItemToOrder.id.replace(/^\D+/g, '');
+        const ctx = await server.app.get(RequestContextService).create({ apiType: 'admin' });
+        const order = await server.app
+            .get(OrderService)
+            .findOne(ctx, internalOrderId, ['lines.productVariant']);
+
+        for (const line of order?.lines ?? []) {
+            // Assert that things are as we expect before hydrating
+            expect(line.productVariantId).toBe(line.productVariant.id);
+        }
+
+        // modify the first order line to make postgres tend to return the lines in the wrong order
+        await server.app
+            .get(TransactionalConnection)
+            .getRepository(ctx, OrderLine)
+            .update(order!.lines[0].id, {
+                sellerChannelId: 1,
+            });
+
+        await server.app.get(EntityHydrator).hydrate(ctx, order!, {
+            relations: ['lines.sellerChannel'],
+        });
+
+        for (const line of order?.lines ?? []) {
+            expect(line.productVariantId).toBe(line.productVariant.id);
+        }
+    });
+
+    /*
+     * Postgres has a character limit for alias names which can cause issues when joining
+     * multiple aliases with the same prefix
+     * https://github.com/vendure-ecommerce/vendure/issues/2899
+     */
+    it('Hydrates properties with very long names', async () => {
+        await adminClient.query<UpdateChannelMutation, UpdateChannelMutationVariables>(UPDATE_CHANNEL, {
+            input: {
+                id: 'T_1',
+                customFields: {
+                    additionalConfigId: 'T_1',
+                },
+            },
+        });
+
+        const { hydrateChannelWithVeryLongPropertyName } = await adminClient.query<{
+            hydrateChannelWithVeryLongPropertyName: any;
+        }>(GET_HYDRATED_CHANNEL_LONG_ALIAS, {
+            id: 'T_1',
+        });
+
+        const entity = (
+            hydrateChannelWithVeryLongPropertyName.customFields.additionalConfig as AdditionalConfig
+        ).treeEntity[0];
+        const child = entity.childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself[0];
+        expect(child.image1).toBeDefined();
+        expect(child.image2).toBeDefined();
     });
 });
 
@@ -262,5 +463,17 @@ const GET_HYDRATED_ORDER_QUANTITIES = gql`
 const GET_HYDRATED_CHANNEL = gql`
     query GetHydratedChannel($id: ID!) {
         hydrateChannel(id: $id)
+    }
+`;
+
+const GET_HYDRATED_CHANNEL_NESTED = gql`
+    query GetHydratedChannelNested($id: ID!) {
+        hydrateChannelWithNestedRelation(id: $id)
+    }
+`;
+
+const GET_HYDRATED_CHANNEL_LONG_ALIAS = gql`
+    query GetHydratedChannelNested($id: ID!) {
+        hydrateChannelWithVeryLongPropertyName(id: $id)
     }
 `;

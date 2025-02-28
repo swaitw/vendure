@@ -29,6 +29,7 @@ import { OrderService } from './order.service';
 export class SessionService implements EntitySubscriberInterface {
     private sessionCacheStrategy: SessionCacheStrategy;
     private readonly sessionDurationInMs: number;
+    private readonly sessionCacheTimeoutMs = 50;
 
     constructor(
         private connection: TransactionalConnection,
@@ -36,25 +37,29 @@ export class SessionService implements EntitySubscriberInterface {
         private orderService: OrderService,
     ) {
         this.sessionCacheStrategy = this.configService.authOptions.sessionCacheStrategy;
-        this.sessionDurationInMs = ms(this.configService.authOptions.sessionDuration as string);
+
+        const { sessionDuration } = this.configService.authOptions;
+        this.sessionDurationInMs =
+            typeof sessionDuration === 'string' ? ms(sessionDuration) : sessionDuration;
+
         // This allows us to register this class as a TypeORM Subscriber while also allowing
         // the injection on dependencies. See https://docs.nestjs.com/techniques/database#subscribers
         this.connection.rawConnection.subscribers.push(this);
     }
 
     /** @internal */
-    afterInsert(event: InsertEvent<any>): Promise<any> | void {
-        this.clearSessionCacheOnDataChange(event);
+    async afterInsert(event: InsertEvent<any>): Promise<any> {
+        await this.clearSessionCacheOnDataChange(event);
     }
 
     /** @internal */
-    afterRemove(event: RemoveEvent<any>): Promise<any> | void {
-        this.clearSessionCacheOnDataChange(event);
+    async afterRemove(event: RemoveEvent<any>): Promise<any> {
+        await this.clearSessionCacheOnDataChange(event);
     }
 
     /** @internal */
-    afterUpdate(event: UpdateEvent<any>): Promise<any> | void {
-        this.clearSessionCacheOnDataChange(event);
+    async afterUpdate(event: UpdateEvent<any>): Promise<any> {
+        await this.clearSessionCacheOnDataChange(event);
     }
 
     private async clearSessionCacheOnDataChange(
@@ -65,7 +70,7 @@ export class SessionService implements EntitySubscriberInterface {
             // session cache will be wrong, so we just clear the entire cache. It should however
             // be a very rare occurrence in normal operation, once initial setup is complete.
             if (event.entity instanceof Channel || event.entity instanceof Role) {
-                await this.sessionCacheStrategy.clear();
+                await this.withTimeout(this.sessionCacheStrategy.clear());
             }
         }
     }
@@ -96,7 +101,7 @@ export class SessionService implements EntitySubscriberInterface {
                 invalidated: false,
             }),
         );
-        await this.sessionCacheStrategy.set(this.serializeSession(authenticatedSession));
+        await this.withTimeout(this.sessionCacheStrategy.set(this.serializeSession(authenticatedSession)));
         return authenticatedSession;
     }
 
@@ -115,7 +120,7 @@ export class SessionService implements EntitySubscriberInterface {
         // save the new session
         const newSession = await this.connection.rawConnection.getRepository(AnonymousSession).save(session);
         const serializedSession = this.serializeSession(newSession);
-        await this.sessionCacheStrategy.set(serializedSession);
+        await this.withTimeout(this.sessionCacheStrategy.set(serializedSession));
         return serializedSession;
     }
 
@@ -124,14 +129,14 @@ export class SessionService implements EntitySubscriberInterface {
      * Returns the cached session object matching the given session token.
      */
     async getSessionFromToken(sessionToken: string): Promise<CachedSession | undefined> {
-        let serializedSession = await this.sessionCacheStrategy.get(sessionToken);
+        let serializedSession = await this.withTimeout(this.sessionCacheStrategy.get(sessionToken));
         const stale = !!(serializedSession && serializedSession.cacheExpiry < new Date().getTime() / 1000);
         const expired = !!(serializedSession && serializedSession.expires < new Date());
         if (!serializedSession || stale || expired) {
             const session = await this.findSessionByToken(sessionToken);
             if (session) {
                 serializedSession = this.serializeSession(session);
-                await this.sessionCacheStrategy.set(serializedSession);
+                await this.withTimeout(this.sessionCacheStrategy.set(serializedSession));
                 return serializedSession;
             } else {
                 return;
@@ -145,8 +150,11 @@ export class SessionService implements EntitySubscriberInterface {
      * Serializes a {@link Session} instance into a simplified plain object suitable for caching.
      */
     serializeSession(session: AuthenticatedSession | AnonymousSession): CachedSession {
-        const expiry =
-            Math.floor(new Date().getTime() / 1000) + this.configService.authOptions.sessionCacheTTL;
+        const { sessionCacheTTL } = this.configService.authOptions;
+        const sessionCacheTTLSeconds =
+            typeof sessionCacheTTL === 'string' ? ms(sessionCacheTTL) / 1000 : sessionCacheTTL;
+
+        const expiry = new Date().getTime() / 1000 + sessionCacheTTLSeconds;
         const serializedSession: CachedSession = {
             cacheExpiry: expiry,
             id: session.id,
@@ -166,6 +174,19 @@ export class SessionService implements EntitySubscriberInterface {
             };
         }
         return serializedSession;
+    }
+
+    /**
+     * If the session cache is taking longer than say 50ms then something is wrong - it is supposed to
+     * be very fast after all! So we will return undefined and let the request continue without a cached session.
+     */
+    private withTimeout<T>(maybeSlow: Promise<T> | T): Promise<T | undefined> {
+        return Promise.race([
+            new Promise<undefined>(resolve =>
+                setTimeout(() => resolve(undefined), this.sessionCacheTimeoutMs),
+            ),
+            maybeSlow,
+        ]);
     }
 
     /**
@@ -197,14 +218,15 @@ export class SessionService implements EntitySubscriberInterface {
         serializedSession: CachedSession,
         order: Order,
     ): Promise<CachedSession> {
-        const session = await this.connection
-            .getRepository(ctx, Session)
-            .findOne(serializedSession.id, { relations: ['user', 'user.roles', 'user.roles.channels'] });
+        const session = await this.connection.getRepository(ctx, Session).findOne({
+            where: { id: serializedSession.id },
+            relations: ['user', 'user.roles', 'user.roles.channels'],
+        });
         if (session) {
             session.activeOrder = order;
             await this.connection.getRepository(ctx, Session).save(session, { reload: false });
             const updatedSerializedSession = this.serializeSession(session);
-            await this.sessionCacheStrategy.set(updatedSerializedSession);
+            await this.withTimeout(this.sessionCacheStrategy.set(updatedSerializedSession));
             return updatedSerializedSession;
         }
         return serializedSession;
@@ -216,9 +238,10 @@ export class SessionService implements EntitySubscriberInterface {
      */
     async unsetActiveOrder(ctx: RequestContext, serializedSession: CachedSession): Promise<CachedSession> {
         if (serializedSession.activeOrderId) {
-            const session = await this.connection
-                .getRepository(ctx, Session)
-                .findOne(serializedSession.id, { relations: ['user', 'user.roles', 'user.roles.channels'] });
+            const session = await this.connection.getRepository(ctx, Session).findOne({
+                where: { id: serializedSession.id },
+                relations: ['user', 'user.roles', 'user.roles.channels'],
+            });
             if (session) {
                 session.activeOrder = null;
                 await this.connection.getRepository(ctx, Session).save(session);
@@ -235,14 +258,15 @@ export class SessionService implements EntitySubscriberInterface {
      * Sets the `activeChannel` on the given cached session object and updates the cache.
      */
     async setActiveChannel(serializedSession: CachedSession, channel: Channel): Promise<CachedSession> {
-        const session = await this.connection.rawConnection
-            .getRepository(Session)
-            .findOne(serializedSession.id, { relations: ['user', 'user.roles', 'user.roles.channels'] });
+        const session = await this.connection.rawConnection.getRepository(Session).findOne({
+            where: { id: serializedSession.id },
+            relations: ['user', 'user.roles', 'user.roles.channels'],
+        });
         if (session) {
             session.activeChannel = channel;
             await this.connection.rawConnection.getRepository(Session).save(session, { reload: false });
             const updatedSerializedSession = this.serializeSession(session);
-            await this.sessionCacheStrategy.set(updatedSerializedSession);
+            await this.withTimeout(this.sessionCacheStrategy.set(updatedSerializedSession));
             return updatedSerializedSession;
         }
         return serializedSession;
@@ -255,10 +279,10 @@ export class SessionService implements EntitySubscriberInterface {
     async deleteSessionsByUser(ctx: RequestContext, user: User): Promise<void> {
         const userSessions = await this.connection
             .getRepository(ctx, AuthenticatedSession)
-            .find({ where: { user } });
+            .find({ where: { user: { id: user.id } } });
         await this.connection.getRepository(ctx, AuthenticatedSession).remove(userSessions);
         for (const session of userSessions) {
-            await this.sessionCacheStrategy.delete(session.token);
+            await this.withTimeout(this.sessionCacheStrategy.delete(session.token));
         }
     }
 
@@ -270,7 +294,7 @@ export class SessionService implements EntitySubscriberInterface {
         const sessions = await this.connection.getRepository(ctx, Session).find({ where: { activeOrderId } });
         await this.connection.getRepository(ctx, Session).remove(sessions);
         for (const session of sessions) {
-            await this.sessionCacheStrategy.delete(session.token);
+            await this.withTimeout(this.sessionCacheStrategy.delete(session.token));
         }
     }
 

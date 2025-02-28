@@ -1,5 +1,5 @@
 import { Job } from '@vendure/core';
-import { ConnectionOptions, QueueSchedulerOptions, WorkerOptions } from 'bullmq';
+import { ConnectionOptions, WorkerOptions } from 'bullmq';
 import { QueueOptions } from 'bullmq';
 
 /**
@@ -7,7 +7,7 @@ import { QueueOptions } from 'bullmq';
  * Configuration options for the {@link BullMQJobQueuePlugin}.
  *
  * @since 1.2.0
- * @docsCategory job-queue-plugin
+ * @docsCategory core plugins/JobQueuePlugin
  * @docsPage BullMQPluginOptions
  * @docsWeight 0
  */
@@ -26,21 +26,14 @@ export interface BullMQPluginOptions {
      * Queue instance.
      * See the [BullMQ QueueOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.queueoptions.md)
      */
-    queueOptions?: Exclude<QueueOptions, 'connection'>;
+    queueOptions?: Omit<QueueOptions, 'connection'>;
     /**
      * @description
      * Additional options used when instantiating the BullMQ
      * Worker instance.
      * See the [BullMQ WorkerOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.workeroptions.md)
      */
-    workerOptions?: Exclude<WorkerOptions, 'connection'>;
-    /**
-     * @description
-     * Additional options used when instantiating the BullMQ
-     * QueueScheduler instance.
-     * See the [BullMQ QueueSchedulerOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.queuescheduleroptions.md)
-     */
-    schedulerOptions?: Exclude<QueueSchedulerOptions, 'connection'>;
+    workerOptions?: Omit<WorkerOptions, 'connection'>;
     /**
      * @description
      * When a job is added to the JobQueue using `JobQueue.add()`, the calling
@@ -49,7 +42,7 @@ export interface BullMQPluginOptions {
      * the job being added.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * setRetries: (queueName, job) => {
      *   if (queueName === 'send-email') {
      *     // Override the default number of retries
@@ -72,7 +65,7 @@ export interface BullMQPluginOptions {
      * value of exponential/1000ms will be used.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * setBackoff: (queueName, job) => {
      *   return {
      *     type: 'exponential', // or 'fixed'
@@ -91,11 +84,21 @@ export interface BullMQPluginOptions {
  * Configuration for the backoff function when retrying failed jobs.
  *
  * @since 1.3.0
- * @docsCategory job-queue-plugin
+ * @docsCategory core plugins/JobQueuePlugin
  * @docsPage BullMQPluginOptions
  * @docsWeight 1
  */
 export interface BackoffOptions {
     type: 'exponential' | 'fixed';
     delay: number;
+}
+
+/**
+ * @description
+ * A definition for a Lua script used to define custom behavior in Redis
+ */
+export interface CustomScriptDefinition<T, Args extends any[]> {
+    name: string;
+    script: string;
+    numberOfKeys: number;
 }

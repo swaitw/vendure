@@ -4,11 +4,10 @@ import { ActivatedRoute, Router } from '@angular/router';
 import {
     BaseListComponent,
     DataService,
-    GetAllJobs,
-    GetFacetList,
-    GetJobQueueList,
-    ModalService,
-    NotificationService,
+    GetAllJobsQuery,
+    GetJobQueueListQuery,
+    ItemOf,
+    JobState,
     SortOrder,
 } from '@vendure/admin-ui/core';
 import { Observable, timer } from 'rxjs';
@@ -21,20 +20,15 @@ import { filter, map, takeUntil } from 'rxjs/operators';
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class JobListComponent
-    extends BaseListComponent<GetAllJobs.Query, GetAllJobs.Items>
-    implements OnInit {
-    queues$: Observable<GetJobQueueList.JobQueues[]>;
+    extends BaseListComponent<GetAllJobsQuery, ItemOf<GetAllJobsQuery, 'jobs'>>
+    implements OnInit
+{
+    queues$: Observable<GetJobQueueListQuery['jobQueues']>;
     liveUpdate = new FormControl(true);
-    hideSettled = new FormControl(true);
     queueFilter = new FormControl('all');
+    stateFilter = new FormControl<JobState | string>('');
 
-    constructor(
-        private dataService: DataService,
-        private modalService: ModalService,
-        private notificationService: NotificationService,
-        router: Router,
-        route: ActivatedRoute,
-    ) {
+    constructor(private dataService: DataService, router: Router, route: ActivatedRoute) {
         super(router, route);
         super.setQueryFn(
             (...args: any[]) => this.dataService.settings.getAllJobs(...args),
@@ -42,14 +36,14 @@ export class JobListComponent
             (skip, take) => {
                 const queueFilter =
                     this.queueFilter.value === 'all' ? null : { queueName: { eq: this.queueFilter.value } };
-                const hideSettled = this.hideSettled.value;
+                const stateFilter = this.stateFilter.value;
                 return {
                     options: {
                         skip,
                         take,
                         filter: {
                             ...queueFilter,
-                            ...(hideSettled ? { isSettled: { eq: false } } : {}),
+                            ...(stateFilter ? { state: { eq: stateFilter } } : {}),
                         },
                         sort: {
                             createdAt: SortOrder.DESC,
@@ -65,7 +59,7 @@ export class JobListComponent
         timer(5000, 2000)
             .pipe(
                 takeUntil(this.destroy$),
-                filter(() => this.liveUpdate.value),
+                filter(() => !!this.liveUpdate.value),
             )
             .subscribe(() => {
                 this.refresh();
@@ -73,14 +67,10 @@ export class JobListComponent
         this.queues$ = this.dataService.settings
             .getJobQueues()
             .mapStream(res => res.jobQueues)
-            .pipe(
-                map(queues => {
-                    return [{ name: 'all', running: true }, ...queues];
-                }),
-            );
+            .pipe(map(queues => [{ name: 'all', running: true }, ...queues]));
     }
 
-    hasResult(job: GetAllJobs.Items): boolean {
+    hasResult(job: ItemOf<GetAllJobsQuery, 'jobs'>): boolean {
         const result = job.result;
         if (result == null) {
             return false;

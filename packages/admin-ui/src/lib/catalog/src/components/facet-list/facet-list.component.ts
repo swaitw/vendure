@@ -1,20 +1,27 @@
 import { Component, OnInit } from '@angular/core';
-import { FormControl } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import {
-    BaseListComponent,
     DataService,
-    DeletionResult,
-    GetFacetList,
+    FACET_WITH_VALUE_LIST_FRAGMENT,
+    GetFacetListDocument,
+    GetFacetListQuery,
+    ItemOf,
     LanguageCode,
-    ModalService,
-    NotificationService,
-    ServerConfigService,
+    TypedBaseListComponent,
 } from '@vendure/admin-ui/core';
-import { SortOrder } from '@vendure/common/lib/generated-shop-types';
-import { EMPTY, Observable } from 'rxjs';
-import { debounceTime, filter, map, switchMap, takeUntil, tap } from 'rxjs/operators';
+import { gql } from 'apollo-angular';
+
+export const FACET_LIST_QUERY = gql`
+    query GetFacetList($options: FacetListOptions, $facetValueListOptions: FacetValueListOptions) {
+        facets(options: $options) {
+            items {
+                ...FacetWithValueList
+            }
+            totalItems
+        }
+    }
+    ${FACET_WITH_VALUE_LIST_FRAGMENT}
+`;
 
 @Component({
     selector: 'vdr-facet-list',
@@ -22,114 +29,72 @@ import { debounceTime, filter, map, switchMap, takeUntil, tap } from 'rxjs/opera
     styleUrls: ['./facet-list.component.scss'],
 })
 export class FacetListComponent
-    extends BaseListComponent<GetFacetList.Query, GetFacetList.Items>
+    extends TypedBaseListComponent<typeof GetFacetListDocument, 'facets'>
     implements OnInit
 {
-    filterTermControl = new FormControl('');
-    availableLanguages$: Observable<LanguageCode[]>;
-    contentLanguage$: Observable<LanguageCode>;
     readonly initialLimit = 3;
     displayLimit: { [id: string]: number } = {};
-    constructor(
-        private dataService: DataService,
-        private modalService: ModalService,
-        private notificationService: NotificationService,
-        private serverConfigService: ServerConfigService,
-        router: Router,
-        route: ActivatedRoute,
-    ) {
-        super(router, route);
-        super.setQueryFn(
-            (...args: any[]) => this.dataService.facet.getFacets(...args).refetchOnChannelChange(),
-            data => data.facets,
-            (skip, take) => ({
+
+    dataTableListId = 'facet-list';
+    readonly customFields = this.getCustomFieldConfig('Facet');
+    readonly filters = this.createFilterCollection()
+        .addIdFilter()
+        .addDateFilters()
+        .addFilter({
+            name: 'visibility',
+            type: { kind: 'boolean' },
+            label: _('common.visibility'),
+            toFilterInput: value => ({
+                isPrivate: { eq: !value },
+            }),
+        })
+        .addCustomFieldFilters(this.customFields)
+        .connectToRoute(this.route);
+
+    readonly sorts = this.createSortCollection()
+        .defaultSort('createdAt', 'DESC')
+        .addSort({ name: 'id' })
+        .addSort({ name: 'createdAt' })
+        .addSort({ name: 'updatedAt' })
+        .addSort({ name: 'name' })
+        .addSort({ name: 'code' })
+        .addCustomFieldSorts(this.customFields)
+        .connectToRoute(this.route);
+
+    constructor(protected dataService: DataService) {
+        super();
+        super.configure({
+            document: GetFacetListDocument,
+            getItems: data => data.facets,
+            setVariables: (skip, take) => ({
                 options: {
                     skip,
                     take,
                     filter: {
                         name: {
-                            contains: this.filterTermControl.value,
+                            contains: this.searchTermControl.value,
                         },
+                        ...this.filters.createFilterInput(),
                     },
-                    sort: {
-                        createdAt: SortOrder.DESC,
-                    },
+                    sort: this.sorts.createSortInput(),
+                },
+                facetValueListOptions: {
+                    take: 100,
                 },
             }),
-        );
+            refreshListOnChanges: [this.filters.valueChanges, this.sorts.valueChanges],
+        });
     }
 
-    ngOnInit() {
-        super.ngOnInit();
-        this.availableLanguages$ = this.serverConfigService.getAvailableLanguages();
-        this.contentLanguage$ = this.dataService.client
-            .uiState()
-            .mapStream(({ uiState }) => uiState.contentLanguage)
-            .pipe(tap(() => this.refresh()));
-        this.filterTermControl.valueChanges
-            .pipe(
-                filter(value => 2 <= value.length || value.length === 0),
-                debounceTime(250),
-                takeUntil(this.destroy$),
-            )
-            .subscribe(() => this.refresh());
-    }
-
-    toggleDisplayLimit(facet: GetFacetList.Items) {
-        if (this.displayLimit[facet.id] === facet.values.length) {
+    toggleDisplayLimit(facet: ItemOf<GetFacetListQuery, 'facets'>) {
+        if (this.displayLimit[facet.id] === facet.valueList.items.length) {
             this.displayLimit[facet.id] = this.initialLimit;
         } else {
-            this.displayLimit[facet.id] = facet.values.length;
+            this.displayLimit[facet.id] = facet.valueList.items.length;
         }
-    }
-
-    deleteFacet(facetValueId: string) {
-        this.showModalAndDelete(facetValueId)
-            .pipe(
-                switchMap(response => {
-                    if (response.result === DeletionResult.DELETED) {
-                        return [true];
-                    } else {
-                        return this.showModalAndDelete(facetValueId, response.message || '').pipe(
-                            map(r => r.result === DeletionResult.DELETED),
-                        );
-                    }
-                }),
-                // Refresh the cached facets to reflect the changes
-                switchMap(() => this.dataService.facet.getAllFacets().single$),
-            )
-            .subscribe(
-                () => {
-                    this.notificationService.success(_('common.notify-delete-success'), {
-                        entity: 'FacetValue',
-                    });
-                    this.refresh();
-                },
-                err => {
-                    this.notificationService.error(_('common.notify-delete-error'), {
-                        entity: 'FacetValue',
-                    });
-                },
-            );
     }
 
     setLanguage(code: LanguageCode) {
         this.dataService.client.setContentLanguage(code).subscribe();
-    }
-
-    private showModalAndDelete(facetId: string, message?: string) {
-        return this.modalService
-            .dialog({
-                title: _('catalog.confirm-delete-facet'),
-                body: message,
-                buttons: [
-                    { type: 'secondary', label: _('common.cancel') },
-                    { type: 'danger', label: _('common.delete'), returnValue: true },
-                ],
-            })
-            .pipe(
-                switchMap(res => (res ? this.dataService.facet.deleteFacet(facetId, !!message) : EMPTY)),
-                map(res => res.deleteFacet),
-            );
     }
 }

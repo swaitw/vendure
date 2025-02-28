@@ -1,11 +1,11 @@
 import { ChangeDetectionStrategy, Component, OnInit } from '@angular/core';
-import { FormBuilder, FormControl, FormGroup, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import {
     CreateCustomerGroupInput,
     CustomFieldConfig,
     Dialog,
+    getCustomFieldsDefaults,
     ServerConfigService,
-    UpdateCustomerGroupInput,
 } from '@vendure/admin-ui/core';
 
 @Component({
@@ -18,21 +18,19 @@ export class CustomerGroupDetailDialogComponent implements Dialog<CreateCustomer
     group: { id?: string; name: string; customFields?: { [name: string]: any } };
     resolveWith: (result?: CreateCustomerGroupInput) => void;
     customFields: CustomFieldConfig[];
-    form: FormGroup;
+    form: UntypedFormGroup;
 
-    constructor(private serverConfigService: ServerConfigService, private formBuilder: FormBuilder) {
+    constructor(private serverConfigService: ServerConfigService, private formBuilder: UntypedFormBuilder) {
         this.customFields = this.serverConfigService.getCustomFieldsFor('CustomerGroup');
     }
 
     ngOnInit() {
         this.form = this.formBuilder.group({
             name: [this.group.name, Validators.required],
-            customFields: this.formBuilder.group(
-                this.customFields.reduce((hash, field) => ({ ...hash, [field.name]: '' }), {}),
-            ),
+            customFields: this.formBuilder.group(getCustomFieldsDefaults(this.customFields)),
         });
         if (this.customFields.length) {
-            const customFieldsGroup = this.form.get('customFields') as FormGroup;
+            const customFieldsGroup = this.form.get('customFields') as UntypedFormGroup;
 
             for (const fieldDef of this.customFields) {
                 const key = fieldDef.name;

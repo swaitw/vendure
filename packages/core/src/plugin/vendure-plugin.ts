@@ -4,7 +4,7 @@ import { ModuleMetadata } from '@nestjs/common/interfaces';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { pick } from '@vendure/common/lib/pick';
 import { Type } from '@vendure/common/lib/shared-types';
-import { DocumentNode } from 'graphql';
+import { DocumentNode, GraphQLScalarType } from 'graphql';
 
 import { RuntimeVendureConfig } from '../config/vendure-config';
 
@@ -43,6 +43,30 @@ export interface VendurePluginMetadata extends ModuleMetadata {
      * The plugin may define custom [TypeORM database entities](https://typeorm.io/#/entities).
      */
     entities?: Array<Type<any>> | (() => Array<Type<any>>);
+    /**
+     * @description
+     * The plugin should define a valid [semver version string](https://www.npmjs.com/package/semver) to indicate which versions of
+     * Vendure core it is compatible with. Attempting to use a plugin with an incompatible
+     * version of Vendure will result in an error and the server will be unable to bootstrap.
+     *
+     * If a plugin does not define this property, a message will be logged on bootstrap that the plugin is not
+     * guaranteed to be compatible with the current version of Vendure.
+     *
+     * To effectively disable this check for a plugin, you can use an overly-permissive string such as `>0.0.0`.
+     *
+     * :::note
+     * Since Vendure v3.1.0, it is possible to ignore compatibility errors for specific plugins by
+     * passing the `ignoreCompatibilityErrorsForPlugins` option to the {@link bootstrap} function.
+     * :::
+     *
+     * @example
+     * ```ts
+     * compatibility: '^3.0.0'
+     * ```
+     *
+     * @since 2.0.0
+     */
+    compatibility?: string;
 }
 /**
  * @description
@@ -58,7 +82,7 @@ export interface APIExtensionDefinition {
      * Extensions to the schema.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * const schema = gql`extend type SearchReindexResponse {
      *     timeTaken: Int!
      *     indexedItemCount: Int!
@@ -71,7 +95,16 @@ export interface APIExtensionDefinition {
      * An array of resolvers for the schema extensions. Should be defined as [Nestjs GraphQL resolver](https://docs.nestjs.com/graphql/resolvers-map)
      * classes, i.e. using the Nest `\@Resolver()` decorator etc.
      */
-    resolvers: Array<Type<any>> | (() => Array<Type<any>>);
+    resolvers?: Array<Type<any>> | (() => Array<Type<any>>);
+    /**
+     * @description
+     * A map of GraphQL scalar types which should correspond to any custom scalars defined in your schema.
+     * Read more about defining custom scalars in the
+     * [Apollo Server Custom Scalars docs](https://www.apollographql.com/docs/apollo-server/schema/custom-scalars)
+     *
+     * @since 1.7.0
+     */
+    scalars?: Record<string, GraphQLScalarType> | (() => Record<string, GraphQLScalarType>);
 }
 
 /**
@@ -95,7 +128,7 @@ export type PluginConfigurationFn = (
  * entirely new types. Database entities and resolvers can also be defined to handle the extended GraphQL types.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { Controller, Get } from '\@nestjs/common';
  * import { Ctx, PluginCommonModule, ProductService, RequestContext, VendurePlugin } from '\@vendure/core';
  *
@@ -121,7 +154,7 @@ export type PluginConfigurationFn = (
  * @docsCategory plugin
  */
 export function VendurePlugin(pluginMetadata: VendurePluginMetadata): ClassDecorator {
-    // tslint:disable-next-line:ban-types
+    // eslint-disable-next-line @typescript-eslint/ban-types
     return (target: Function) => {
         for (const metadataProperty of Object.values(PLUGIN_METADATA)) {
             const property = metadataProperty as keyof VendurePluginMetadata;

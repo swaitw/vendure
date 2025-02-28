@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { omit } from '@vendure/common/lib/omit';
 import { ID, Type } from '@vendure/common/lib/shared-types';
+import { FindOneOptions } from 'typeorm';
+import { FindManyOptions } from 'typeorm/find-options/FindManyOptions';
 
 import { RequestContext } from '../../../api/common/request-context';
 import { Translatable, TranslatedInput, Translation } from '../../../common/types/locale-types';
@@ -29,7 +31,7 @@ export interface UpdateTranslatableOptions<T extends Translatable> extends Creat
  * A helper which contains methods for creating and updating entities which implement the {@link Translatable} interface.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export class MyService {
  *   constructor(private translatableSaver: TranslatableSaver) {}
  *
@@ -92,9 +94,11 @@ export class TranslatableSaver {
     async update<T extends Translatable & VendureEntity>(options: UpdateTranslatableOptions<T>): Promise<T> {
         const { ctx, entityType, translationType, input, beforeSave, typeOrmSubscriberData } = options;
         const existingTranslations = await this.connection.getRepository(ctx, translationType).find({
-            where: { base: input.id },
+            relationLoadStrategy: 'query',
+            loadEagerRelations: false,
+            where: { base: { id: input.id } },
             relations: ['base'],
-        });
+        } as FindManyOptions<Translation<T>>);
 
         const differ = new TranslationDiffer(translationType, this.connection);
         const diff = differ.diff(existingTranslations, input.translations);
@@ -103,6 +107,8 @@ export class TranslatableSaver {
             new entityType({ ...input, translations: existingTranslations }),
             diff,
         );
+        entity.updatedAt = new Date();
+
         const updatedEntity = patchEntity(entity as any, omit(input, ['translations']));
         if (typeof beforeSave === 'function') {
             await beforeSave(entity);

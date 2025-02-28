@@ -15,6 +15,14 @@ export class ActionBarLeftComponent {
     template: `
         <ng-content></ng-content>
     `,
+    styles: [
+        `
+            :host {
+                display: flex;
+                align-items: center;
+            }
+        `,
+    ],
 })
 export class ActionBarRightComponent {
     @Input() grow = false;

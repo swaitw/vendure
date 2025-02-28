@@ -8,12 +8,11 @@ import {
     SimpleChanges,
 } from '@angular/core';
 
-import { GetAssetList } from '../../../common/generated-types';
 import { SelectionManager } from '../../../common/utilities/selection-manager';
 import { ModalService } from '../../../providers/modal/modal.service';
 import { AssetPreviewDialogComponent } from '../asset-preview-dialog/asset-preview-dialog.component';
 
-export type AssetLike = GetAssetList.Items;
+import { AssetLike } from './asset-gallery.types';
 
 @Component({
     selector: 'vdr-asset-gallery',
@@ -30,6 +29,7 @@ export class AssetGalleryComponent implements OnChanges {
     @Input() canDelete = false;
     @Output() selectionChange = new EventEmitter<AssetLike[]>();
     @Output() deleteAssets = new EventEmitter<AssetLike[]>();
+    @Output() editAssetClick = new EventEmitter<void>();
 
     selectionManager = new SelectionManager<AssetLike>({
         multiSelect: this.multiSelect,
@@ -42,7 +42,7 @@ export class AssetGalleryComponent implements OnChanges {
     ngOnChanges(changes: SimpleChanges) {
         if (this.assets) {
             for (const asset of this.selectionManager.selection) {
-                // Update and selected assets with any changes
+                // Update any selected assets with any changes
                 const match = this.assets.find(a => a.id === asset.id);
                 if (match) {
                     Object.assign(asset, match);
@@ -80,7 +80,7 @@ export class AssetGalleryComponent implements OnChanges {
             .fromComponent(AssetPreviewDialogComponent, {
                 size: 'xl',
                 closable: true,
-                locals: { asset },
+                locals: { asset, assets: this.assets },
             })
             .subscribe();
     }

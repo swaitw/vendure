@@ -1,10 +1,10 @@
 import { DynamicModule, Injectable, Type } from '@nestjs/common';
 import { LanguageCode } from '@vendure/common/lib/generated-types';
-import { ConnectionOptions } from 'typeorm';
+import { DataSourceOptions, getMetadataArgsStorage } from 'typeorm';
 
 import { getConfig } from './config-helpers';
 import { CustomFields } from './custom-field/custom-field-types';
-import { EntityIdStrategy } from './entity-id-strategy/entity-id-strategy';
+import { EntityIdStrategy } from './entity/entity-id-strategy';
 import { Logger, VendureLogger } from './logger/vendure-logger';
 import {
     ApiOptions,
@@ -27,11 +27,12 @@ import {
 @Injectable()
 export class ConfigService implements VendureConfig {
     private activeConfig: RuntimeVendureConfig;
+    private allCustomFieldsConfig: Required<CustomFields> | undefined;
 
     constructor() {
         this.activeConfig = getConfig();
         if (this.activeConfig.authOptions.disableAuth) {
-            // tslint:disable-next-line
+            // eslint-disable-next-line
             Logger.warn('Auth has been disabled. This should never be the case for a production system!');
         }
     }
@@ -68,7 +69,7 @@ export class ConfigService implements VendureConfig {
         return this.activeConfig.assetOptions;
     }
 
-    get dbConnectionOptions(): ConnectionOptions {
+    get dbConnectionOptions(): DataSourceOptions {
         return this.activeConfig.dbConnectionOptions;
     }
 
@@ -81,7 +82,7 @@ export class ConfigService implements VendureConfig {
     }
 
     get orderOptions(): Required<OrderOptions> {
-        return this.activeConfig.orderOptions as Required<OrderOptions>;
+        return this.activeConfig.orderOptions;
     }
 
     get paymentOptions(): Required<PaymentOptions> {
@@ -97,7 +98,10 @@ export class ConfigService implements VendureConfig {
     }
 
     get customFields(): Required<CustomFields> {
-        return this.activeConfig.customFields;
+        if (!this.allCustomFieldsConfig) {
+            this.allCustomFieldsConfig = this.getCustomFieldsForAllEntities();
+        }
+        return this.allCustomFieldsConfig;
     }
 
     get plugins(): Array<DynamicModule | Type<any>> {
@@ -114,5 +118,40 @@ export class ConfigService implements VendureConfig {
 
     get systemOptions(): Required<SystemOptions> {
         return this.activeConfig.systemOptions;
+    }
+
+    private getCustomFieldsForAllEntities(): Required<CustomFields> {
+        const definedCustomFields = this.activeConfig.customFields;
+        const metadataArgsStorage = getMetadataArgsStorage();
+        // We need to check for any entities which have a "customFields" property but which are not
+        // explicitly defined in the customFields config. This is because the customFields object
+        // only includes the built-in entities. Any custom entities which have a "customFields"
+        // must be dynamically added to the customFields object.
+        if (Array.isArray(this.dbConnectionOptions.entities)) {
+            for (const entity of this.dbConnectionOptions.entities) {
+                if (typeof entity === 'function' && !definedCustomFields[entity.name]) {
+                    const hasCustomFields = !!metadataArgsStorage
+                        .filterEmbeddeds(entity)
+                        .find(c => c.propertyName === 'customFields');
+                    const isTranslationEntity =
+                        entity.name.endsWith('Translation') &&
+                        metadataArgsStorage
+                            .filterColumns(entity)
+                            .find(c => c.propertyName === 'languageCode');
+                    if (hasCustomFields && !isTranslationEntity) {
+                        definedCustomFields[entity.name] = [];
+                    }
+                }
+            }
+        }
+        return definedCustomFields;
+    }
+
+    /**
+     * This is a precaution against attempting to JSON.stringify() a reference to
+     * this class, which can lead to a circular reference error.
+     */
+    protected toJSON() {
+        return {};
     }
 }

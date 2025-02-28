@@ -1,8 +1,22 @@
 import { RequestContext } from '../../../api/common/request-context';
-import { Transitions } from '../../../common/finite-state-machine/types';
 import { Order } from '../../../entity/order/order.entity';
-import { Payment } from '../../../entity/payment/payment.entity';
 import { Refund } from '../../../entity/refund/refund.entity';
+
+/**
+ * @description
+ * An interface to extend standard {@link RefundState}.
+ *
+ * @deprecated use RefundStates
+ */
+export interface CustomRefundStates {}
+
+/**
+ * @description
+ * An interface to extend standard {@link RefundState}.
+ *
+ * @docsCategory payment
+ */
+export interface RefundStates {}
 
 /**
  * @description
@@ -10,23 +24,11 @@ import { Refund } from '../../../entity/refund/refund.entity';
  *
  * @docsCategory payment
  */
-export type RefundState = 'Pending' | 'Settled' | 'Failed';
-
-export const refundStateTransitions: Transitions<RefundState> = {
-    Pending: {
-        to: ['Settled', 'Failed'],
-    },
-    Settled: {
-        to: [],
-    },
-    Failed: {
-        to: [],
-    },
-};
+export type RefundState = 'Pending' | 'Settled' | 'Failed' | keyof CustomRefundStates | keyof RefundStates;
 
 /**
  * @description
- * The data which is passed to the state transition handlers of the RefundStateMachine.
+ * The data which is passed to the state transition handler of the RefundStateMachine.
  *
  * @docsCategory payment
  */

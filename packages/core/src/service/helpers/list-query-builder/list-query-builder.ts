@@ -4,30 +4,31 @@ import { ID, Type } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
 import {
     Brackets,
-    FindConditions,
-    FindManyOptions,
     FindOneOptions,
+    FindOptionsWhere,
     Repository,
     SelectQueryBuilder,
+    WhereExpressionBuilder,
 } from 'typeorm';
 import { BetterSqlite3Driver } from 'typeorm/driver/better-sqlite3/BetterSqlite3Driver';
 import { SqljsDriver } from 'typeorm/driver/sqljs/SqljsDriver';
-import { FindOptionsUtils } from 'typeorm/find-options/FindOptionsUtils';
 
-import { ApiType } from '../../../api/common/get-api-type';
-import { RequestContext } from '../../../api/common/request-context';
-import { UserInputError } from '../../../common/error/errors';
-import { ListQueryOptions, NullOptionals, SortParameter } from '../../../common/types/common-types';
-import { ConfigService } from '../../../config/config.service';
-import { CustomFields } from '../../../config/index';
-import { Logger } from '../../../config/logger/vendure-logger';
-import { TransactionalConnection } from '../../../connection/transactional-connection';
-import { VendureEntity } from '../../../entity/base/base.entity';
+import { ApiType, RequestContext } from '../../../api';
+import {
+    FilterParameter,
+    ListQueryOptions,
+    NullOptionals,
+    SortParameter,
+    UserInputError,
+} from '../../../common';
+import { ConfigService, CustomFields, Logger } from '../../../config';
+import { TransactionalConnection } from '../../../connection';
+import { VendureEntity } from '../../../entity';
+import { joinTreeRelationsDynamically } from '../utils/tree-relations-qb-joiner';
 
 import { getColumnMetadata, getEntityAlias } from './connection-utils';
 import { getCalculatedColumns } from './get-calculated-columns';
-import { parseChannelParam } from './parse-channel-param';
-import { parseFilterParams } from './parse-filter-params';
+import { parseFilterParams, WhereGroup } from './parse-filter-params';
 import { parseSortParams } from './parse-sort-params';
 
 /**
@@ -40,7 +41,7 @@ import { parseSortParams } from './parse-sort-params';
 export type ExtendedListQueryOptions<T extends VendureEntity> = {
     relations?: string[];
     channelId?: ID;
-    where?: FindConditions<T>;
+    where?: FindOptionsWhere<T>;
     orderBy?: FindOneOptions<T>['order'];
     /**
      * @description
@@ -90,17 +91,38 @@ export type ExtendedListQueryOptions<T extends VendureEntity> = {
      *   customPropertyMap: {
      *     // Tell TypeORM how to map that custom
      *     // sort/filter field to the property on a
-     *     // related entity. Note that the `customer`
-     *     // part needs to match the *table name* of the
-     *     // related entity. So, e.g. if you are mapping to
-     *     // a `FacetValue` relation's `id` property, the value
-     *     // would be `facet_value.id`.
+     *     // related entity.
      *     customerLastName: 'customer.lastName',
      *   },
      * };
      * ```
+     * We can now use the `customerLastName` property to filter or sort
+     * on the list query:
+     *
+     * @example
+     * ```GraphQL
+     * query {
+     *   myOrderQuery(options: {
+     *     filter: {
+     *       customerLastName: { contains: "sm" }
+     *     }
+     *   }) {
+     *     # ...
+     *   }
+     * }
+     * ```
      */
     customPropertyMap?: { [name: string]: string };
+    /**
+     * @description
+     * When set to `true`, the configured `shopListQueryLimit` and `adminListQueryLimit` values will be ignored,
+     * allowing unlimited results to be returned. Use caution when exposing an unlimited list query to the public,
+     * as it could become a vector for a denial of service attack if an attacker requests a very large list.
+     *
+     * @since 2.0.2
+     * @default false
+     */
+    ignoreQueryLimits?: boolean;
 };
 
 /**
@@ -138,7 +160,7 @@ export type ExtendedListQueryOptions<T extends VendureEntity> = {
  *
  * Your resolver function will then look like this:
  *
- * ```TypeScript
+ * ```ts
  * \@Resolver()
  * export class BlogPostResolver
  *   constructor(private blogPostService: BlogPostService) {}
@@ -155,7 +177,7 @@ export type ExtendedListQueryOptions<T extends VendureEntity> = {
  *
  * and the corresponding service will use the ListQueryBuilder:
  *
- * ```TypeScript
+ * ```ts
  * \@Injectable()
  * export class BlogPostService {
  *   constructor(private listQueryBuilder: ListQueryBuilder) {}
@@ -177,7 +199,10 @@ export type ExtendedListQueryOptions<T extends VendureEntity> = {
  */
 @Injectable()
 export class ListQueryBuilder implements OnApplicationBootstrap {
-    constructor(private connection: TransactionalConnection, private configService: ConfigService) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private configService: ConfigService,
+    ) {}
 
     /** @internal */
     onApplicationBootstrap(): any {
@@ -185,6 +210,43 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
     }
 
     /**
+     * @description
+     * Used to determine whether a list query `filter` object contains the
+     * given property, either at the top level or nested inside a boolean
+     * `_and` or `_or` expression.
+     *
+     * This is useful when a custom property map is used to map a filter
+     * field to a related entity, and we need to determine whether the
+     * filter object contains that property, which then means we would need
+     * to join that relation.
+     */
+    filterObjectHasProperty<FP extends FilterParameter<VendureEntity>>(
+        filterObject: FP | NullOptionals<FP> | null | undefined,
+        property: keyof FP,
+    ): boolean {
+        if (!filterObject) {
+            return false;
+        }
+        for (const key in filterObject) {
+            if (!filterObject[key]) {
+                continue;
+            }
+            if (key === property) {
+                return true;
+            }
+            if (key === '_and' || key === '_or') {
+                const value = filterObject[key] as FP[];
+                for (const condition of value) {
+                    if (this.filterObjectHasProperty(condition, property)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /*
      * @description
      * Creates and configures a SelectQueryBuilder for queries that return paginated lists of entities.
      */
@@ -194,97 +256,122 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
         extendedOptions: ExtendedListQueryOptions<T> = {},
     ): SelectQueryBuilder<T> {
         const apiType = extendedOptions.ctx?.apiType ?? 'shop';
-        const rawConnection = this.connection.rawConnection;
-        const { take, skip } = this.parseTakeSkipParams(apiType, options);
+        const { take, skip } = this.parseTakeSkipParams(apiType, options, extendedOptions.ignoreQueryLimits);
 
         const repo = extendedOptions.ctx
             ? this.connection.getRepository(extendedOptions.ctx, entity)
             : this.connection.rawConnection.getRepository(entity);
-
-        const qb = repo.createQueryBuilder(extendedOptions.entityAlias || entity.name.toLowerCase());
+        const alias = extendedOptions.entityAlias || entity.name.toLowerCase();
         const minimumRequiredRelations = this.getMinimumRequiredRelations(repo, options, extendedOptions);
-        FindOptionsUtils.applyFindManyOptionsOrConditionsToQueryBuilder(qb, {
-            relations: minimumRequiredRelations,
+        const qb = repo.createQueryBuilder(alias);
+
+        let relations = unique([...minimumRequiredRelations, ...(extendedOptions?.relations ?? [])]);
+
+        // Special case for the 'collection' entity, which has a complex nested structure
+        // and requires special handling to ensure that only the necessary relations are joined.
+        // This is bypassed an issue in TypeORM where it would join the same relation multiple times.
+        // See https://github.com/typeorm/typeorm/issues/9936 for more context.
+        const processedRelations = joinTreeRelationsDynamically(qb, entity, relations);
+
+        // Remove any relations which are related to the 'collection' tree, as these are handled separately
+        // to avoid duplicate joins.
+        relations = relations.filter(relationPath => !processedRelations.has(relationPath));
+
+        qb.setFindOptions({
+            relations,
             take,
             skip,
             where: extendedOptions.where || {},
-        } as FindManyOptions<T>);
-        // tslint:disable-next-line:no-non-null-assertion
-        FindOptionsUtils.joinEagerRelations(qb, qb.alias, qb.expressionMap.mainAlias!.metadata);
+            relationLoadStrategy: 'query',
+        });
 
         // join the tables required by calculated columns
         this.joinCalculatedColumnRelations(qb, entity, options);
 
-        const { customPropertyMap, entityAlias } = extendedOptions;
+        const { customPropertyMap } = extendedOptions;
         if (customPropertyMap) {
             this.normalizeCustomPropertyMap(customPropertyMap, options, qb);
         }
         const customFieldsForType = this.configService.customFields[entity.name as keyof CustomFields];
         const sortParams = Object.assign({}, options.sort, extendedOptions.orderBy);
-        this.applyTranslationConditions(
-            qb,
-            entity,
-            sortParams,
-            extendedOptions.ctx,
-            extendedOptions.entityAlias,
-        );
+        this.applyTranslationConditions(qb, entity, sortParams, extendedOptions.ctx);
         const sort = parseSortParams(
-            rawConnection,
+            qb.connection,
             entity,
             sortParams,
             customPropertyMap,
-            entityAlias,
+            qb.alias,
             customFieldsForType,
         );
-        const filter = parseFilterParams(
-            rawConnection,
-            entity,
-            options.filter,
-            customPropertyMap,
-            entityAlias,
-        );
+        const filter = parseFilterParams(qb.connection, entity, options.filter, customPropertyMap, qb.alias);
 
         if (filter.length) {
             const filterOperator = options.filterOperator ?? LogicalOperator.AND;
-            if (filterOperator === LogicalOperator.AND) {
-                filter.forEach(({ clause, parameters }) => {
-                    qb.andWhere(clause, parameters);
-                });
-            } else {
-                qb.andWhere(
-                    new Brackets(qb1 => {
-                        filter.forEach(({ clause, parameters }) => {
-                            qb1.orWhere(clause, parameters);
-                        });
-                    }),
-                );
-            }
+            qb.andWhere(
+                new Brackets(qb1 => {
+                    for (const condition of filter) {
+                        if ('conditions' in condition) {
+                            this.addNestedWhereClause(qb1, condition, filterOperator);
+                        } else {
+                            if (filterOperator === LogicalOperator.AND) {
+                                qb1.andWhere(condition.clause, condition.parameters);
+                            } else {
+                                qb1.orWhere(condition.clause, condition.parameters);
+                            }
+                        }
+                    }
+                }),
+            );
         }
 
         if (extendedOptions.channelId) {
-            const channelFilter = parseChannelParam(
-                rawConnection,
-                entity,
-                extendedOptions.channelId,
-                extendedOptions.entityAlias,
-            );
-            if (channelFilter) {
-                qb.andWhere(channelFilter.clause, channelFilter.parameters);
-            }
+            qb.innerJoin(`${qb.alias}.channels`, 'lqb__channel', 'lqb__channel.id = :channelId', {
+                channelId: extendedOptions.channelId,
+            });
         }
 
         qb.orderBy(sort);
-        this.optimizeGetManyAndCountMethod(qb, repo, extendedOptions, minimumRequiredRelations);
-        this.optimizeGetManyMethod(qb, repo, extendedOptions, minimumRequiredRelations);
         return qb;
+    }
+
+    private addNestedWhereClause(
+        qb: WhereExpressionBuilder,
+        whereGroup: WhereGroup,
+        parentOperator: LogicalOperator,
+    ) {
+        if (whereGroup.conditions.length) {
+            const subQb = new Brackets(qb1 => {
+                whereGroup.conditions.forEach(condition => {
+                    if ('conditions' in condition) {
+                        this.addNestedWhereClause(qb1, condition, whereGroup.operator);
+                    } else {
+                        if (whereGroup.operator === LogicalOperator.AND) {
+                            qb1.andWhere(condition.clause, condition.parameters);
+                        } else {
+                            qb1.orWhere(condition.clause, condition.parameters);
+                        }
+                    }
+                });
+            });
+            if (parentOperator === LogicalOperator.AND) {
+                qb.andWhere(subQb);
+            } else {
+                qb.orWhere(subQb);
+            }
+        }
     }
 
     private parseTakeSkipParams(
         apiType: ApiType,
         options: ListQueryOptions<any>,
+        ignoreQueryLimits = false,
     ): { take: number; skip: number } {
         const { shopListQueryLimit, adminListQueryLimit } = this.configService.apiOptions;
-        const takeLimit = apiType === 'admin' ? adminListQueryLimit : shopListQueryLimit;
+        const takeLimit = ignoreQueryLimits
+            ? Number.MAX_SAFE_INTEGER
+            : apiType === 'admin'
+              ? adminListQueryLimit
+              : shopListQueryLimit;
         if (options.take && options.take > takeLimit) {
             throw new UserInputError('error.list-query-limit-exceeded', { limit: takeLimit });
         }
@@ -313,6 +400,7 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
         if (extendedOptions.channelId) {
             requiredRelations.push('channels');
         }
+
         if (extendedOptions.customPropertyMap) {
             const metadata = repository.metadata;
 
@@ -322,14 +410,15 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
                     // to join the associated relations.
                     continue;
                 }
-                const tableNameLower = path.split('.')[0];
-                const entityMetadata = repository.manager.connection.entityMetadatas.find(
-                    em => em.tableNameWithoutPrefix === tableNameLower,
-                );
-                if (entityMetadata) {
-                    const relationMetadata = metadata.relations.find(r => r.type === entityMetadata.target);
+                const relationPath = path.split('.').slice(0, -1);
+                let targetMetadata = metadata;
+                const recontructedPath = [];
+                for (const relationPathPart of relationPath) {
+                    const relationMetadata = targetMetadata.findRelationWithPropertyPath(relationPathPart);
                     if (relationMetadata) {
-                        requiredRelations.push(relationMetadata.propertyName);
+                        recontructedPath.push(relationMetadata.propertyName);
+                        requiredRelations.push(recontructedPath.join('.'));
+                        targetMetadata = relationMetadata.inverseEntityMetadata;
                     }
                 }
             }
@@ -338,113 +427,19 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
     }
 
     private customPropertyIsBeingUsed(property: string, options: ListQueryOptions<any>): boolean {
-        return !!(options.sort?.[property] || options.filter?.[property]);
+        return !!(options.sort?.[property] || this.isPropertyUsedInFilter(property, options.filter));
     }
 
-    /**
-     * @description
-     * This will monkey-patch the `getManyAndCount()` method in order to implement a more efficient
-     * parallel-query based approach to joining multiple relations. This is loosely based on the
-     * solution outlined here: https://github.com/typeorm/typeorm/issues/3857#issuecomment-633006643
-     *
-     * TODO: When upgrading to TypeORM v0.3+, this will likely become redundant due to the new
-     * `relationLoadStrategy` feature.
-     */
-    private optimizeGetManyAndCountMethod<T extends VendureEntity>(
-        qb: SelectQueryBuilder<T>,
-        repo: Repository<T>,
-        extendedOptions: ExtendedListQueryOptions<T>,
-        alreadyJoined: string[],
-    ) {
-        const originalGetManyAndCount = qb.getManyAndCount.bind(qb);
-        qb.getManyAndCount = async () => {
-            const relations = unique(extendedOptions.relations ?? []);
-            const [entities, count] = await originalGetManyAndCount();
-            if (relations == null || alreadyJoined.sort().join() === relations?.sort().join()) {
-                // No further relations need to be joined, so we just
-                // return the regular result.
-                return [entities, count];
-            }
-            const result = await this.parallelLoadRelations(entities, relations, alreadyJoined, repo);
-            return [result, count];
-        };
-    }
-    /**
-     * @description
-     * This will monkey-patch the `getMany()` method in order to implement a more efficient
-     * parallel-query based approach to joining multiple relations. This is loosely based on the
-     * solution outlined here: https://github.com/typeorm/typeorm/issues/3857#issuecomment-633006643
-     *
-     * TODO: When upgrading to TypeORM v0.3+, this will likely become redundant due to the new
-     * `relationLoadStrategy` feature.
-     */
-    private optimizeGetManyMethod<T extends VendureEntity>(
-        qb: SelectQueryBuilder<T>,
-        repo: Repository<T>,
-        extendedOptions: ExtendedListQueryOptions<T>,
-        alreadyJoined: string[],
-    ) {
-        const originalGetMany = qb.getMany.bind(qb);
-        qb.getMany = async () => {
-            const relations = unique(extendedOptions.relations ?? []);
-            const entities = await originalGetMany();
-            if (relations == null || alreadyJoined.sort().join() === relations?.sort().join()) {
-                // No further relations need to be joined, so we just
-                // return the regular result.
-                return entities;
-            }
-            return this.parallelLoadRelations(entities, relations, alreadyJoined, repo);
-        };
-    }
-
-    private async parallelLoadRelations<T extends VendureEntity>(
-        entities: T[],
-        relations: string[],
-        alreadyJoined: string[],
-        repo: Repository<T>,
-    ): Promise<T[]> {
-        const entityMap = new Map(entities.map(e => [e.id, e]));
-        const entitiesIds = entities.map(({ id }) => id);
-
-        const splitRelations = relations.map(r => r.split('.'));
-        const groupedRelationsMap = new Map<string, string[]>();
-        for (const relationParts of splitRelations) {
-            const group = groupedRelationsMap.get(relationParts[0]);
-            if (group) {
-                group.push(relationParts.join('.'));
-            } else {
-                groupedRelationsMap.set(relationParts[0], [relationParts.join('.')]);
-            }
-        }
-
-        // If the extendedOptions includes relations that were already joined, then
-        // we ignore those now so as not to do the work of joining twice.
-        for (const tableName of alreadyJoined) {
-            if (groupedRelationsMap.get(tableName)?.length === 1) {
-                groupedRelationsMap.delete(tableName);
-            }
-        }
-
-        const entitiesIdsWithRelations = await Promise.all(
-            Array.from(groupedRelationsMap.values())?.map(relationPaths => {
-                return repo
-                    .findByIds(entitiesIds, {
-                        select: ['id'],
-                        relations: relationPaths,
-                        loadEagerRelations: false,
-                    })
-                    .then(results =>
-                        results.map(r => ({ relation: relationPaths[0] as keyof T, entity: r })),
-                    );
-            }),
-        ).then(all => all.flat());
-        for (const entry of entitiesIdsWithRelations) {
-            const finalEntity = entityMap.get(entry.entity.id);
-            if (finalEntity) {
-                finalEntity[entry.relation] = entry.entity[entry.relation];
-            }
-        }
-        return Array.from(entityMap.values());
+    private isPropertyUsedInFilter(
+        property: string,
+        filter?: NullOptionals<FilterParameter<any>> | null,
+    ): boolean {
+        return !!(
+            filter &&
+            (filter[property] ||
+                filter._and?.some(nestedFilter => this.isPropertyUsedInFilter(property, nestedFilter)) ||
+                filter._or?.some(nestedFilter => this.isPropertyUsedInFilter(property, nestedFilter)))
+        );
     }
 
     /**
@@ -453,7 +448,7 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
      *
      * This method mutates the customPropertyMap object.
      */
-    private normalizeCustomPropertyMap(
+    private normalizeCustomPropertyMap<T extends VendureEntity>(
         customPropertyMap: { [name: string]: string },
         options: ListQueryOptions<any>,
         qb: SelectQueryBuilder<any>,
@@ -462,20 +457,41 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
             if (!this.customPropertyIsBeingUsed(property, options)) {
                 continue;
             }
-            const parts = customPropertyMap[property].split('.');
-            const entityPart = 2 <= parts.length ? parts[parts.length - 2] : qb.alias;
-            const columnPart = parts[parts.length - 1];
-            const relationAlias = qb.expressionMap.aliases.find(
-                a => a.metadata.tableNameWithoutPrefix === entityPart,
-            );
-            if (relationAlias) {
-                customPropertyMap[property] = `${relationAlias.name}.${columnPart}`;
-            } else {
-                Logger.error(
-                    `The customPropertyMap entry "${property}:${value}" could not be resolved to a related table`,
-                );
-                delete customPropertyMap[property];
+            let parts = customPropertyMap[property].split('.');
+            const normalizedRelationPath: string[] = [];
+            let entityMetadata = qb.expressionMap.mainAlias?.metadata;
+            let entityAlias = qb.alias;
+            while (parts.length > 1) {
+                const entityPart = 2 <= parts.length ? parts[0] : qb.alias;
+                const columnPart = parts[parts.length - 1];
+
+                if (!entityMetadata) {
+                    Logger.error(`Could not get metadata for entity ${qb.alias}`);
+                    continue;
+                }
+                const relationMetadata = entityMetadata.findRelationWithPropertyPath(entityPart);
+                if (!relationMetadata ?? !relationMetadata?.propertyName) {
+                    Logger.error(
+                        `The customPropertyMap entry "${property}:${value}" could not be resolved to a related table`,
+                    );
+                    delete customPropertyMap[property];
+                    return;
+                }
+                const alias = `${entityMetadata.tableName}_${relationMetadata.propertyName}`;
+                if (!this.isRelationAlreadyJoined(qb, alias)) {
+                    qb.leftJoinAndSelect(`${entityAlias}.${relationMetadata.propertyName}`, alias);
+                }
+                parts = parts.slice(1);
+                entityMetadata = relationMetadata?.inverseEntityMetadata;
+                normalizedRelationPath.push(entityAlias);
+
+                if (parts.length === 1) {
+                    normalizedRelationPath.push(alias, columnPart);
+                } else {
+                    entityAlias = alias;
+                }
             }
+            customPropertyMap[property] = normalizedRelationPath.slice(-2).join('.');
         }
     }
 
@@ -529,16 +545,11 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
         entity: Type<T>,
         sortParams: NullOptionals<SortParameter<T>> & FindOneOptions<T>['order'],
         ctx?: RequestContext,
-        entityAlias?: string,
     ) {
         const languageCode = ctx?.languageCode || this.configService.defaultLanguageCode;
 
-        const {
-            columns,
-            translationColumns,
-            alias: defaultAlias,
-        } = getColumnMetadata(this.connection.rawConnection, entity);
-        const alias = entityAlias ?? defaultAlias;
+        const { translationColumns } = getColumnMetadata(qb.connection, entity);
+        const alias = qb.alias;
 
         const sortKeys = Object.keys(sortParams);
         let sortingOnTranslatableKey = false;
@@ -549,10 +560,15 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
         }
 
         if (translationColumns.length && sortingOnTranslatableKey) {
-            const translationsAlias = qb.connection.namingStrategy.eagerJoinRelationAlias(
+            const translationsAlias = qb.connection.namingStrategy.joinTableName(
                 alias,
                 'translations',
+                '',
+                '',
             );
+            if (!this.isRelationAlreadyJoined(qb, translationsAlias)) {
+                qb.leftJoinAndSelect(`${alias}.translations`, translationsAlias);
+            }
 
             qb.andWhere(
                 new Brackets(qb1 => {
@@ -625,5 +641,12 @@ export class ListQueryBuilder implements OnApplicationBootstrap {
             const driver = this.connection.rawConnection.driver as SqljsDriver;
             driver.databaseConnection.create_function('regexp', regexpFn);
         }
+    }
+
+    private isRelationAlreadyJoined<T extends VendureEntity>(
+        qb: SelectQueryBuilder<T>,
+        alias: string,
+    ): boolean {
+        return qb.expressionMap.joinAttributes.some(ja => ja.alias.name === alias);
     }
 }

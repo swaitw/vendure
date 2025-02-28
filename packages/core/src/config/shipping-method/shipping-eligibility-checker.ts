@@ -3,14 +3,15 @@ import { Json } from '@vendure/common/lib/shared-types';
 import { createHash } from 'crypto';
 
 import { RequestContext } from '../../api/common/request-context';
+import { CacheService } from '../../cache/index';
 import {
     ConfigArgs,
     ConfigArgValues,
     ConfigurableOperationDef,
     ConfigurableOperationDefOptions,
 } from '../../common/configurable-operation';
-import { TtlCache } from '../../common/ttl-cache';
-import { ShippingMethod, Order } from '../../entity';
+import { Injector } from '../../common/index';
+import { Order, ShippingMethod } from '../../entity';
 
 /**
  * @description
@@ -46,17 +47,22 @@ export interface ShippingEligibilityCheckerConfig<T extends ConfigArgs>
  * @docsCategory shipping
  * @docsPage ShippingEligibilityChecker
  */
-export class ShippingEligibilityChecker<T extends ConfigArgs = ConfigArgs> extends ConfigurableOperationDef<
-    T
-> {
+export class ShippingEligibilityChecker<
+    T extends ConfigArgs = ConfigArgs,
+> extends ConfigurableOperationDef<T> {
     private readonly checkFn: CheckShippingEligibilityCheckerFn<T>;
     private readonly shouldRunCheckFn?: ShouldRunCheckFn<T>;
-    private shouldRunCheckCache = new TtlCache({ cacheSize: 5000, ttl: 1000 * 60 * 60 * 5 });
+    private cacheService: CacheService;
 
     constructor(config: ShippingEligibilityCheckerConfig<T>) {
         super(config);
         this.checkFn = config.check;
         this.shouldRunCheckFn = config.shouldRunCheck;
+    }
+
+    async init(injector: Injector) {
+        await super.init(injector);
+        this.cacheService = injector.get(CacheService);
     }
 
     /**
@@ -65,7 +71,12 @@ export class ShippingEligibilityChecker<T extends ConfigArgs = ConfigArgs> exten
      *
      * @internal
      */
-    async check(ctx: RequestContext, order: Order, args: ConfigArg[], method: ShippingMethod): Promise<boolean> {
+    async check(
+        ctx: RequestContext,
+        order: Order,
+        args: ConfigArg[],
+        method: ShippingMethod,
+    ): Promise<boolean> {
         const shouldRunCheck = await this.shouldRunCheck(ctx, order, args, method);
         return shouldRunCheck ? this.checkFn(ctx, order, this.argsArrayToHash(args), method) : true;
     }
@@ -74,22 +85,41 @@ export class ShippingEligibilityChecker<T extends ConfigArgs = ConfigArgs> exten
      * Determines whether the check function needs to be run, based on the presence and
      * result of any defined `shouldRunCheckFn`.
      */
-    private async shouldRunCheck(ctx: RequestContext, order: Order, args: ConfigArg[], method: ShippingMethod): Promise<boolean> {
+    private async shouldRunCheck(
+        ctx: RequestContext,
+        order: Order,
+        args: ConfigArg[],
+        method: ShippingMethod,
+    ): Promise<boolean> {
         if (typeof this.shouldRunCheckFn === 'function') {
-            const cacheKey = ctx.session?.id;
+            const cacheKey =
+                ctx.session?.id && `ShippingEligibilityChecker:shouldRunCheck:${this.code}:${ctx.session.id}`;
             if (cacheKey) {
-                const checkResult = await this.shouldRunCheckFn(ctx, order, this.argsArrayToHash(args), method);
+                const checkResult = await this.shouldRunCheckFn(
+                    ctx,
+                    order,
+                    this.argsArrayToHash(args),
+                    method,
+                );
                 const checkResultHash = createHash('sha1')
                     .update(JSON.stringify(checkResult))
                     .digest('base64');
-                const lastResultHash = this.shouldRunCheckCache.get(cacheKey);
-                this.shouldRunCheckCache.set(cacheKey, checkResultHash);
+                const lastResultHash = await this.cacheService.get(cacheKey);
+                await this.cacheService.set(cacheKey, checkResultHash, { ttl: 1000 * 60 * 60 * 5 });
                 if (checkResultHash === lastResultHash) {
                     return false;
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * This is a precaution against attempting to JSON.stringify() a reference to
+     * this class, which can lead to a circular reference error.
+     */
+    protected toJSON() {
+        return {};
     }
 }
 
@@ -109,7 +139,7 @@ export type CheckShippingEligibilityCheckerFn<T extends ConfigArgs> = (
     ctx: RequestContext,
     order: Order,
     args: ConfigArgValues<T>,
-    method: ShippingMethod
+    method: ShippingMethod,
 ) => boolean | Promise<boolean>;
 
 /**
@@ -122,7 +152,7 @@ export type CheckShippingEligibilityCheckerFn<T extends ConfigArgs> = (
  * the `check()` function is expensive and should be kept to an absolute minimum.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * const optimizedChecker = new ShippingEligibilityChecker({
  *   code: 'example',
  *   description: [],
@@ -144,5 +174,5 @@ export type ShouldRunCheckFn<T extends ConfigArgs> = (
     ctx: RequestContext,
     order: Order,
     args: ConfigArgValues<T>,
-    method: ShippingMethod
+    method: ShippingMethod,
 ) => Json | Promise<Json>;

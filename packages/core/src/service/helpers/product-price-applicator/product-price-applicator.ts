@@ -2,8 +2,8 @@ import { Injectable } from '@nestjs/common';
 
 import { RequestContext } from '../../../api/common/request-context';
 import { RequestContextCacheService } from '../../../cache/request-context-cache.service';
+import { CacheKey } from '../../../common/constants';
 import { InternalServerError } from '../../../common/error/errors';
-import { idsAreEqual } from '../../../common/utils';
 import { ConfigService } from '../../../config/config.service';
 import { Order } from '../../../entity/order/order.entity';
 import { ProductVariant } from '../../../entity/product-variant/product-variant.entity';
@@ -18,7 +18,7 @@ import { ZoneService } from '../../services/zone.service';
  * always be `0` until you use the `applyChannelPriceAndTax()` method:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export class MyCustomService {
  *   constructor(private connection: TransactionalConnection,
  *               private productPriceApplicator: ProductPriceApplicator) {}
@@ -51,26 +51,37 @@ export class ProductPriceApplicator {
      * @description
      * Populates the `price` field with the price for the specified channel. Make sure that
      * the ProductVariant being passed in has its `taxCategory` relation joined.
+     *
+     * If the `throwIfNoPriceFound` option is set to `true`, then an error will be thrown if no
+     * price is found for the given Channel.
      */
     async applyChannelPriceAndTax(
         variant: ProductVariant,
         ctx: RequestContext,
         order?: Order,
+        throwIfNoPriceFound = false,
     ): Promise<ProductVariant> {
-        const channelPrice = variant.productVariantPrices.find(p => idsAreEqual(p.channelId, ctx.channelId));
-        if (!channelPrice) {
-            throw new InternalServerError(`error.no-price-found-for-channel`, {
+        const { productVariantPriceSelectionStrategy, productVariantPriceCalculationStrategy } =
+            this.configService.catalogOptions;
+        const channelPrice = await productVariantPriceSelectionStrategy.selectPrice(
+            ctx,
+            variant.productVariantPrices,
+        );
+        if (!channelPrice && throwIfNoPriceFound) {
+            throw new InternalServerError('error.no-price-found-for-channel', {
                 variantId: variant.id,
                 channel: ctx.channel.code,
             });
         }
         const { taxZoneStrategy } = this.configService.taxOptions;
-        const zones = await this.requestCache.get(ctx, 'allZones', () => this.zoneService.findAll(ctx));
-        const activeTaxZone = await this.requestCache.get(ctx, `activeTaxZone`, () =>
+        const zones = await this.requestCache.get(ctx, CacheKey.AllZones, () =>
+            this.zoneService.getAllWithMembers(ctx),
+        );
+        const activeTaxZone = await this.requestCache.get(ctx, CacheKey.ActiveTaxZone_PPA, () =>
             taxZoneStrategy.determineTaxZone(ctx, zones, ctx.channel, order),
         );
         if (!activeTaxZone) {
-            throw new InternalServerError(`error.no-active-tax-zone`);
+            throw new InternalServerError('error.no-active-tax-zone');
         }
         const applicableTaxRate = await this.requestCache.get(
             ctx,
@@ -78,10 +89,10 @@ export class ProductPriceApplicator {
             () => this.taxRateService.getApplicableTaxRate(ctx, activeTaxZone, variant.taxCategory),
         );
 
-        const { productVariantPriceCalculationStrategy } = this.configService.catalogOptions;
         const { price, priceIncludesTax } = await productVariantPriceCalculationStrategy.calculate({
-            inputPrice: channelPrice.price,
+            inputPrice: channelPrice?.price ?? 0,
             taxCategory: variant.taxCategory,
+            productVariant: variant,
             activeTaxZone,
             ctx,
         });
@@ -89,7 +100,7 @@ export class ProductPriceApplicator {
         variant.listPrice = price;
         variant.listPriceIncludesTax = priceIncludesTax;
         variant.taxRateApplied = applicableTaxRate;
-        variant.currencyCode = ctx.channel.currencyCode;
+        variant.currencyCode = channelPrice?.currencyCode ?? ctx.currencyCode;
         return variant;
     }
 }

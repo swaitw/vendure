@@ -29,15 +29,14 @@ export class SqlJobBufferStorageStrategy implements JobBufferStorageStrategy {
     }
 
     async bufferSize(bufferIds?: string[]): Promise<{ [bufferId: string]: number }> {
-        const qb = await this.connection
-            .rawConnection
+        const qb = this.connection.rawConnection
             .getRepository(JobRecordBuffer)
             .createQueryBuilder('record')
-            .select(`COUNT(*)`, 'count')
-            .addSelect(`record.bufferId`, 'bufferId');
+            .select('COUNT(*)', 'count')
+            .addSelect('record.bufferId', 'bufferId');
 
         if (bufferIds?.length) {
-            qb.andWhere(`record.bufferId IN (:...bufferIds)`, { bufferIds });
+            qb.andWhere('record.bufferId IN (:...bufferIds)', { bufferIds });
         }
 
         const rows = await qb.groupBy('record.bufferId').getRawMany();
@@ -54,7 +53,7 @@ export class SqlJobBufferStorageStrategy implements JobBufferStorageStrategy {
             .getRepository(JobRecordBuffer)
             .createQueryBuilder('record');
         if (bufferIds?.length) {
-            selectQb.where(`record.bufferId IN (:...bufferIds)`, { bufferIds });
+            selectQb.where('record.bufferId IN (:...bufferIds)', { bufferIds });
         }
         const rows = await selectQb.getMany();
         const result: { [bufferId: string]: Job[] } = {};
@@ -66,7 +65,7 @@ export class SqlJobBufferStorageStrategy implements JobBufferStorageStrategy {
         }
         const deleteQb = this.connection.rawConnection.createQueryBuilder().delete().from(JobRecordBuffer);
         if (bufferIds?.length) {
-            deleteQb.where(`bufferId IN (:...bufferIds)`, { bufferIds });
+            deleteQb.where('bufferId IN (:...bufferIds)', { bufferIds });
         }
         await deleteQb.execute();
         return result;
@@ -74,8 +73,17 @@ export class SqlJobBufferStorageStrategy implements JobBufferStorageStrategy {
 
     private toJobConfig(job: Job<any>): JobConfig<any> {
         return {
-            ...job,
+            queueName: job.queueName,
             data: job.data,
+            retries: job.retries,
+            attempts: job.attempts,
+            state: job.state,
+            progress: job.progress,
+            result: job.result,
+            error: job.error,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            settledAt: job.settledAt,
             id: job.id ?? undefined,
         };
     }

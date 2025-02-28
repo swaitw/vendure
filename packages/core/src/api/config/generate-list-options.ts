@@ -1,4 +1,3 @@
-import { stitchSchemas, ValidationLevel } from '@graphql-tools/stitch';
 import { notNullOrUndefined } from '@vendure/common/lib/shared-utils';
 import {
     buildSchema,
@@ -10,7 +9,9 @@ import {
     GraphQLInputObjectType,
     GraphQLInputType,
     GraphQLInt,
+    GraphQLList,
     GraphQLNamedType,
+    GraphQLNonNull,
     GraphQLObjectType,
     GraphQLOutputType,
     GraphQLSchema,
@@ -19,7 +20,13 @@ import {
     isListType,
     isNonNullType,
     isObjectType,
-} from 'graphql';
+    // Importing this from graphql/index.js is a workaround for the dual-package
+    // hazard issue when testing this file in vitest. See https://github.com/vitejs/vite/issues/7879
+} from 'graphql/index.js';
+
+// Using require here to prevent issues when running vitest tests also.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { stitchSchemas, ValidationLevel } = require('@graphql-tools/stitch');
 
 /**
  * Generates ListOptions inputs for queries which return PaginatedList types.
@@ -32,10 +39,13 @@ export function generateListOptions(typeDefsOrSchema: string | GraphQLSchema): G
     }
     const logicalOperatorEnum = schema.getType('LogicalOperator');
     const objectTypes = Object.values(schema.getTypeMap()).filter(isObjectType);
-    const allFields = objectTypes.reduce((fields, type) => {
-        const typeFields = Object.values(type.getFields()).filter(f => isListQueryType(f.type));
-        return [...fields, ...typeFields];
-    }, [] as Array<GraphQLField<any, any>>);
+    const allFields = objectTypes.reduce(
+        (fields, type) => {
+            const typeFields = Object.values(type.getFields()).filter(f => isListQueryType(f.type));
+            return [...fields, ...typeFields];
+        },
+        [] as Array<GraphQLField<any, any>>,
+    );
     const generatedTypes: GraphQLNamedType[] = [];
 
     for (const query of allFields) {
@@ -65,7 +75,8 @@ export function generateListOptions(typeDefsOrSchema: string | GraphQLSchema): G
                               filterOperator: {
                                   type: logicalOperatorEnum as GraphQLEnumType,
                                   description:
-                                      'Specifies whether multiple "filter" arguments should be combines with a logical AND or OR operation. Defaults to AND.',
+                                      'Specifies whether multiple top-level "filter" fields should be combined ' +
+                                      'with a logical AND or OR operation. Defaults to AND.',
                               },
                           }
                         : {}),
@@ -74,15 +85,18 @@ export function generateListOptions(typeDefsOrSchema: string | GraphQLSchema): G
             });
 
             if (!query.args.find(a => a.type.toString() === `${targetTypeName}ListOptions`)) {
-                query.args.push({
-                    name: 'options',
-                    type: generatedListOptions,
-                    description: null,
-                    defaultValue: null,
-                    extensions: null,
-                    astNode: null,
-                    deprecationReason: null,
-                });
+                query.args = [
+                    ...query.args,
+                    {
+                        name: 'options',
+                        type: generatedListOptions,
+                        description: null,
+                        defaultValue: null,
+                        extensions: {},
+                        astNode: null,
+                        deprecationReason: null,
+                    },
+                ];
             }
 
             generatedTypes.push(filterParameter);
@@ -113,7 +127,7 @@ function createSortParameter(schema: GraphQLSchema, targetType: GraphQLObjectTyp
         fields.push(...Object.values(existingInput.getFields()));
     }
 
-    const sortableTypes = ['ID', 'String', 'Int', 'Float', 'DateTime'];
+    const sortableTypes = ['ID', 'String', 'Int', 'Float', 'DateTime', 'Money'];
     return new GraphQLInputObjectType({
         name: inputName,
         fields: fields
@@ -121,7 +135,11 @@ function createSortParameter(schema: GraphQLSchema, targetType: GraphQLObjectTyp
                 if (unwrapNonNullType(field.type) === SortOrder) {
                     return field;
                 } else {
-                    return sortableTypes.includes(unwrapNonNullType(field.type).name) ? field : undefined;
+                    const innerType = unwrapNonNullType(field.type);
+                    if (isListType(innerType)) {
+                        return;
+                    }
+                    return sortableTypes.includes(innerType.name) ? field : undefined;
                 }
             })
             .filter(notNullOrUndefined)
@@ -149,29 +167,11 @@ function createFilterParameter(schema: GraphQLSchema, targetType: GraphQLObjectT
         fields.push(...Object.values(existingInput.getFields()));
     }
 
-    return new GraphQLInputObjectType({
-        name: inputName,
-        fields: fields.reduce((result, field) => {
-            const fieldType = field.type;
-            const filterType = isInputObjectType(fieldType) ? fieldType : getFilterType(field);
-            if (!filterType) {
-                return result;
-            }
-            const fieldConfig: GraphQLInputFieldConfig = {
-                type: filterType,
-            };
-            return {
-                ...result,
-                [field.name]: fieldConfig,
-            };
-        }, {} as GraphQLInputFieldConfigMap),
-    });
-
     function getFilterType(field: GraphQLField<any, any> | GraphQLInputField): GraphQLInputType | undefined {
-        if (isListType(field.type)) {
+        const innerType = unwrapNonNullType(field.type);
+        if (isListType(innerType)) {
             return;
         }
-        const innerType = unwrapNonNullType(field.type);
         if (isEnumType(innerType)) {
             return StringOperators;
         }
@@ -182,6 +182,7 @@ function createFilterParameter(schema: GraphQLSchema, targetType: GraphQLObjectT
                 return BooleanOperators;
             case 'Int':
             case 'Float':
+            case 'Money':
                 return NumberOperators;
             case 'DateTime':
                 return DateOperators;
@@ -191,6 +192,33 @@ function createFilterParameter(schema: GraphQLSchema, targetType: GraphQLObjectT
                 return;
         }
     }
+
+    const FilterInputType: GraphQLInputObjectType = new GraphQLInputObjectType({
+        name: inputName,
+        fields: () => {
+            const namedFields = fields.reduce((result, field) => {
+                const fieldType = field.type;
+                const filterType = isInputObjectType(fieldType) ? fieldType : getFilterType(field);
+                if (!filterType) {
+                    return result;
+                }
+                const fieldConfig: GraphQLInputFieldConfig = {
+                    type: filterType,
+                };
+                return {
+                    ...result,
+                    [field.name]: fieldConfig,
+                };
+            }, {} as GraphQLInputFieldConfigMap);
+            return {
+                ...namedFields,
+                _and: { type: new GraphQLList(new GraphQLNonNull(FilterInputType)) },
+                _or: { type: new GraphQLList(new GraphQLNonNull(FilterInputType)) },
+            };
+        },
+    });
+
+    return FilterInputType;
 }
 
 function getCommonTypes(schema: GraphQLSchema) {
@@ -212,7 +240,7 @@ function getCommonTypes(schema: GraphQLSchema) {
         !DateOperators ||
         !IDOperators
     ) {
-        throw new Error(`A common type was not defined`);
+        throw new Error('A common type was not defined');
     }
     return {
         SortOrder,
@@ -227,7 +255,9 @@ function getCommonTypes(schema: GraphQLSchema) {
 /**
  * Unwraps the inner type if it is inside a non-nullable type
  */
-function unwrapNonNullType(type: GraphQLOutputType | GraphQLInputType): GraphQLNamedType {
+function unwrapNonNullType(
+    type: GraphQLOutputType | GraphQLInputType,
+): GraphQLNamedType | GraphQLList<GraphQLOutputType | GraphQLInputType> {
     if (isNonNullType(type)) {
         return type.ofType;
     }

@@ -1,10 +1,10 @@
-import { HttpClientModule, HTTP_INTERCEPTORS } from '@angular/common/http';
+import { HTTP_INTERCEPTORS, HttpClientModule } from '@angular/common/http';
 import { APP_INITIALIZER, Injector, NgModule } from '@angular/core';
 import { ApolloClientOptions, InMemoryCache } from '@apollo/client/core';
 import { setContext } from '@apollo/client/link/context';
 import { ApolloLink } from '@apollo/client/link/core';
-import { APOLLO_OPTIONS } from 'apollo-angular';
-import { createUploadLink } from 'apollo-upload-client';
+import { APOLLO_OPTIONS, ApolloModule } from 'apollo-angular';
+import createUploadLink from 'apollo-upload-client/createUploadLink.mjs';
 
 import { getAppConfig } from '../app.config';
 import { introspectionResult } from '../common/introspection-result-wrapper';
@@ -27,7 +27,7 @@ export function createApollo(
     fetchAdapter: FetchAdapter,
     injector: Injector,
 ): ApolloClientOptions<any> {
-    const { adminApiPath, tokenMethod } = getAppConfig();
+    const { adminApiPath, tokenMethod, channelTokenKey } = getAppConfig();
     const serverLocation = getServerLocation();
     const apolloCache = new InMemoryCache({
         possibleTypes: introspectionResult.possibleTypes,
@@ -36,6 +36,13 @@ export function createApollo(
                 fields: {
                     serverConfig: {
                         merge: (existing, incoming) => ({ ...existing, ...incoming }),
+                    },
+                },
+            },
+            Facet: {
+                fields: {
+                    values: {
+                        merge: (existing, incoming) => incoming,
                     },
                 },
             },
@@ -59,7 +66,7 @@ export function createApollo(
                 const headers: Record<string, string> = {};
                 const channelToken = localStorageService.get('activeChannelToken');
                 if (channelToken) {
-                    headers['vendure-token'] = channelToken;
+                    headers[channelTokenKey ?? 'vendure-token'] = channelToken;
                 }
                 if (tokenMethod === 'bearer') {
                     const authToken = localStorageService.get('authToken');
@@ -67,6 +74,7 @@ export function createApollo(
                         headers.authorization = `Bearer ${authToken}`;
                     }
                 }
+                headers['Apollo-Require-Preflight'] = 'true';
                 return { headers };
             }),
             createUploadLink({
@@ -79,12 +87,14 @@ export function createApollo(
     };
 }
 
+// List of all EU countries
+
 /**
  * The DataModule is responsible for all API calls *and* serves as the source of truth for global app
  * state via the apollo-link-state package.
  */
 @NgModule({
-    imports: [HttpClientModule],
+    imports: [HttpClientModule, ApolloModule],
     exports: [],
     declarations: [],
     providers: [

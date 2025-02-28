@@ -36,7 +36,7 @@ import {
 } from '../../../common/error/generated-graphql-shop-errors';
 import { Translated } from '../../../common/types/locale-types';
 import { idsAreEqual } from '../../../common/utils';
-import { ConfigService, LogLevel } from '../../../config';
+import { ACTIVE_ORDER_INPUT_FIELD_NAME, ConfigService, LogLevel } from '../../../config';
 import { Country } from '../../../entity';
 import { Order } from '../../../entity/order/order.entity';
 import { ActiveOrderService, CountryService } from '../../../service';
@@ -49,6 +49,8 @@ import { Allow } from '../../decorators/allow.decorator';
 import { RelationPaths, Relations } from '../../decorators/relations.decorator';
 import { Ctx } from '../../decorators/request-context.decorator';
 import { Transaction } from '../../decorators/transaction.decorator';
+
+type ActiveOrderArgs = { [ACTIVE_ORDER_INPUT_FIELD_NAME]?: any };
 
 @Resolver()
 export class ShopOrderResolver {
@@ -74,7 +76,8 @@ export class ShopOrderResolver {
     async order(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         const requiredRelations: RelationPaths<Order> = ['customer', 'customer.user'];
         const order = await this.orderService.findOne(
@@ -96,12 +99,17 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async activeOrder(
         @Ctx() ctx: RequestContext,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
+        @Args() args: ActiveOrderArgs,
     ): Promise<Order | undefined> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
-                return this.orderService.findOne(ctx, sessionOrder.id);
+                return this.orderService.findOne(ctx, sessionOrder.id, relations);
             } else {
                 return;
             }
@@ -113,7 +121,8 @@ export class ShopOrderResolver {
     async orderByCode(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderByCodeArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         if (ctx.authorizedAsOwnerOnly) {
             const requiredRelations: RelationPaths<Order> = ['customer', 'customer.user'];
@@ -140,10 +149,13 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async setOrderShippingAddress(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationSetOrderShippingAddressArgs,
+        @Args() args: MutationSetOrderShippingAddressArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.setShippingAddress(ctx, sessionOrder.id, args.input);
             }
@@ -156,10 +168,13 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async setOrderBillingAddress(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationSetOrderBillingAddressArgs,
+        @Args() args: MutationSetOrderBillingAddressArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.setBillingAddress(ctx, sessionOrder.id, args.input);
             }
@@ -167,11 +182,55 @@ export class ShopOrderResolver {
         return new NoActiveOrderError();
     }
 
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.Owner)
+    async unsetOrderShippingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        if (ctx.authorizedAsOwnerOnly) {
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
+            if (sessionOrder) {
+                return this.orderService.unsetShippingAddress(ctx, sessionOrder.id);
+            }
+        }
+        return new NoActiveOrderError();
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.Owner)
+    async unsetOrderBillingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        if (ctx.authorizedAsOwnerOnly) {
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
+            if (sessionOrder) {
+                return this.orderService.unsetBillingAddress(ctx, sessionOrder.id);
+            }
+        }
+        return new NoActiveOrderError();
+    }
+
     @Query()
     @Allow(Permission.Owner)
-    async eligibleShippingMethods(@Ctx() ctx: RequestContext): Promise<ShippingMethodQuote[]> {
+    async eligibleShippingMethods(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<ShippingMethodQuote[]> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.getEligibleShippingMethods(ctx, sessionOrder.id);
             }
@@ -181,9 +240,15 @@ export class ShopOrderResolver {
 
     @Query()
     @Allow(Permission.Owner)
-    async eligiblePaymentMethods(@Ctx() ctx: RequestContext): Promise<PaymentMethodQuote[]> {
+    async eligiblePaymentMethods(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<PaymentMethodQuote[]> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.getEligiblePaymentMethods(ctx, sessionOrder.id);
             }
@@ -196,10 +261,13 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async setOrderShippingMethod(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationSetOrderShippingMethodArgs,
+        @Args() args: MutationSetOrderShippingMethodArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<SetOrderShippingMethodResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.setShippingMethod(ctx, sessionOrder.id, args.shippingMethodId);
             }
@@ -212,10 +280,13 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async setOrderCustomFields(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationSetOrderCustomFieldsArgs,
+        @Args() args: MutationSetOrderCustomFieldsArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 return this.orderService.updateCustomFields(ctx, sessionOrder.id, args.input.customFields);
             }
@@ -223,11 +294,19 @@ export class ShopOrderResolver {
         return new NoActiveOrderError();
     }
 
+    @Transaction()
     @Query()
     @Allow(Permission.Owner)
-    async nextOrderStates(@Ctx() ctx: RequestContext): Promise<ReadonlyArray<string>> {
+    async nextOrderStates(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<readonly string[]> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx, true);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+                true,
+            );
             return this.orderService.getNextOrderStates(sessionOrder);
         }
         return [];
@@ -238,10 +317,14 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async transitionOrderToState(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationTransitionOrderToStateArgs,
+        @Args() args: MutationTransitionOrderToStateArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<TransitionOrderToStateResult, Order> | undefined> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx, true);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+                true,
+            );
             return await this.orderService.transitionToState(ctx, sessionOrder.id, args.state as OrderState);
         }
     }
@@ -251,15 +334,22 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async addItemToOrder(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationAddItemToOrderArgs,
+        @Args() args: MutationAddItemToOrderArgs & ActiveOrderArgs,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<ErrorResultUnion<UpdateOrderItemsResult, Order>> {
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.addItemToOrder(
             ctx,
             order.id,
             args.productVariantId,
             args.quantity,
             (args as any).customFields,
+            relations,
         );
     }
 
@@ -268,18 +358,25 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async adjustOrderLine(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationAdjustOrderLineArgs,
+        @Args() args: MutationAdjustOrderLineArgs & ActiveOrderArgs,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<ErrorResultUnion<UpdateOrderItemsResult, Order>> {
         if (args.quantity === 0) {
             return this.removeOrderLine(ctx, { orderLineId: args.orderLineId });
         }
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.adjustOrderLine(
             ctx,
             order.id,
             args.orderLineId,
             args.quantity,
             (args as any).customFields,
+            relations,
         );
     }
 
@@ -288,9 +385,13 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async removeOrderLine(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationRemoveOrderLineArgs,
+        @Args() args: MutationRemoveOrderLineArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<RemoveOrderItemsResult, Order>> {
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.removeItemFromOrder(ctx, order.id, args.orderLineId);
     }
 
@@ -299,8 +400,13 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async removeAllOrderLines(
         @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
     ): Promise<ErrorResultUnion<RemoveOrderItemsResult, Order>> {
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.removeAllItemsFromOrder(ctx, order.id);
     }
 
@@ -309,9 +415,13 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async applyCouponCode(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationApplyCouponCodeArgs,
+        @Args() args: MutationApplyCouponCodeArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<ApplyCouponCodeResult, Order>> {
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.applyCouponCode(ctx, order.id, args.couponCode);
     }
 
@@ -320,9 +430,13 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async removeCouponCode(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationApplyCouponCodeArgs,
+        @Args() args: MutationApplyCouponCodeArgs & ActiveOrderArgs,
     ): Promise<Order> {
-        const order = await this.activeOrderService.getOrderFromContext(ctx, true);
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
         return this.orderService.removeCouponCode(ctx, order.id, args.couponCode);
     }
 
@@ -331,36 +445,20 @@ export class ShopOrderResolver {
     @Allow(Permission.UpdateOrder, Permission.Owner)
     async addPaymentToOrder(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationAddPaymentToOrderArgs,
+        @Args() args: MutationAddPaymentToOrderArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<AddPaymentToOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
                 const order = await this.orderService.addPaymentToOrder(ctx, sessionOrder.id, args.input);
                 if (isGraphQlErrorResult(order)) {
                     return order;
                 }
                 if (order.active === false) {
-                    if (order.customer) {
-                        const addresses = await this.customerService.findAddressesByCustomerId(
-                            ctx,
-                            order.customer.id,
-                        );
-                        // If the Customer has no addresses yet, use the shipping address data
-                        // to populate the initial default Address.
-                        if (addresses.length === 0 && order.shippingAddress?.country) {
-                            const address = order.shippingAddress;
-                            await this.customerService.createAddress(ctx, order.customer.id, {
-                                ...address,
-                                company: address.company || '',
-                                streetLine1: address.streetLine1 || '',
-                                streetLine2: address.streetLine2 || '',
-                                countryCode: address.countryCode || '',
-                                defaultBillingAddress: true,
-                                defaultShippingAddress: true,
-                            });
-                        }
-                    }
+                    await this.customerService.createAddressesForNewCustomer(ctx, order);
                 }
                 if (order.active === false && ctx.session?.activeOrderId === sessionOrder.id) {
                     await this.sessionService.unsetActiveOrder(ctx, ctx.session);
@@ -376,19 +474,20 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async setCustomerForOrder(
         @Ctx() ctx: RequestContext,
-        @Args() args: MutationSetCustomerForOrderArgs,
+        @Args() args: MutationSetCustomerForOrderArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<SetCustomerForOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            if (ctx.activeUserId) {
-                return new AlreadyLoggedInError();
-            }
-            const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
             if (sessionOrder) {
-                const customer = await this.customerService.createOrUpdate(ctx, args.input, true);
-                if (isGraphQlErrorResult(customer)) {
-                    return customer;
+                const { guestCheckoutStrategy } = this.configService.orderOptions;
+                const result = await guestCheckoutStrategy.setCustomerForOrder(ctx, sessionOrder, args.input);
+                if (isGraphQlErrorResult(result)) {
+                    return result;
                 }
-                return this.orderService.addCustomerToOrder(ctx, sessionOrder.id, customer);
+                return this.orderService.addCustomerToOrder(ctx, sessionOrder.id, result);
             }
         }
         return new NoActiveOrderError();

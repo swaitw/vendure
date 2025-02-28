@@ -5,10 +5,20 @@ import {
     FloatCustomFieldConfig as GraphQLFloatCustomFieldConfig,
     IntCustomFieldConfig as GraphQLIntCustomFieldConfig,
     LocaleStringCustomFieldConfig as GraphQLLocaleStringCustomFieldConfig,
+    LocaleTextCustomFieldConfig as GraphQLLocaleTextCustomFieldConfig,
     LocalizedString,
+    Permission,
     RelationCustomFieldConfig as GraphQLRelationCustomFieldConfig,
     StringCustomFieldConfig as GraphQLStringCustomFieldConfig,
     TextCustomFieldConfig as GraphQLTextCustomFieldConfig,
+    StructCustomFieldConfig as GraphQLStructCustomFieldConfig,
+    StructField as GraphQLStructField,
+    StringStructFieldConfig as GraphQLStringStructFieldConfig,
+    IntStructFieldConfig as GraphQLIntStructFieldConfig,
+    TextStructFieldConfig as GraphQLTextStructFieldConfig,
+    FloatStructFieldConfig as GraphQLFloatStructFieldConfig,
+    BooleanStructFieldConfig as GraphQLBooleanStructFieldConfig,
+    DateTimeStructFieldConfig as GraphQLDateTimeStructFieldConfig,
 } from '@vendure/common/lib/generated-types';
 import {
     CustomFieldsObject,
@@ -16,14 +26,16 @@ import {
     DefaultFormComponentId,
     Type,
     UiComponentConfig,
+    StructFieldType,
 } from '@vendure/common/lib/shared-types';
 
+import { RequestContext } from '../../api/common/request-context';
 import { Injector } from '../../common/injector';
 import { VendureEntity } from '../../entity/base/base.entity';
 
 // prettier-ignore
-export type DefaultValueType<T extends CustomFieldType> =
-    T extends 'string' | 'localeString' ? string :
+export type DefaultValueType<T extends CustomFieldType | StructFieldType> =
+    T extends 'string' | 'localeString' | 'text' | 'localeText' ? string :
         T extends 'int' | 'float' ? number :
             T extends 'boolean' ? boolean :
                 T extends 'datetime' ? Date :
@@ -31,17 +43,26 @@ export type DefaultValueType<T extends CustomFieldType> =
 
 export type BaseTypedCustomFieldConfig<T extends CustomFieldType, C extends CustomField> = Omit<
     C,
-    '__typename' | 'list'
+    '__typename' | 'list' | 'requiresPermission'
 > & {
     type: T;
     /**
      * @description
-     * Whether or not the custom field is available via the Shop API.
+     * Whether the custom field is available via the Shop API.
      * @default true
      */
     public?: boolean;
     nullable?: boolean;
     unique?: boolean;
+    /**
+     * @description
+     * The permission(s) required to read or write to this field.
+     * If the user has at least one of these permissions, they will be
+     * able to access the field.
+     *
+     * @since 2.2.0
+     */
+    requiresPermission?: Array<Permission | string> | Permission | string;
     ui?: UiComponentConfig<DefaultFormComponentId | string>;
 };
 
@@ -60,6 +81,7 @@ export type TypedCustomSingleFieldConfig<
     validate?: (
         value: DefaultValueType<T>,
         injector: Injector,
+        ctx: RequestContext,
     ) => string | LocalizedString[] | void | Promise<string | LocalizedString[] | void>;
 };
 
@@ -69,7 +91,9 @@ export type TypedCustomListFieldConfig<
 > = BaseTypedCustomFieldConfig<T, C> & {
     list?: true;
     defaultValue?: Array<DefaultValueType<T>>;
-    validate?: (value: Array<DefaultValueType<T>>) => string | LocalizedString[] | void;
+    validate?: (
+        value: Array<DefaultValueType<T>>,
+    ) => string | LocalizedString[] | void | Promise<string | LocalizedString[] | void>;
 };
 
 export type TypedCustomFieldConfig<
@@ -78,12 +102,17 @@ export type TypedCustomFieldConfig<
 > = BaseTypedCustomFieldConfig<T, C> &
     (TypedCustomSingleFieldConfig<T, C> | TypedCustomListFieldConfig<T, C>);
 
+// Type-safe custom field type definitions
 export type StringCustomFieldConfig = TypedCustomFieldConfig<'string', GraphQLStringCustomFieldConfig>;
 export type LocaleStringCustomFieldConfig = TypedCustomFieldConfig<
     'localeString',
     GraphQLLocaleStringCustomFieldConfig
 >;
 export type TextCustomFieldConfig = TypedCustomFieldConfig<'text', GraphQLTextCustomFieldConfig>;
+export type LocaleTextCustomFieldConfig = TypedCustomFieldConfig<
+    'localeText',
+    GraphQLLocaleTextCustomFieldConfig
+>;
 export type IntCustomFieldConfig = TypedCustomFieldConfig<'int', GraphQLIntCustomFieldConfig>;
 export type FloatCustomFieldConfig = TypedCustomFieldConfig<'float', GraphQLFloatCustomFieldConfig>;
 export type BooleanCustomFieldConfig = TypedCustomFieldConfig<'boolean', GraphQLBooleanCustomFieldConfig>;
@@ -91,7 +120,104 @@ export type DateTimeCustomFieldConfig = TypedCustomFieldConfig<'datetime', Graph
 export type RelationCustomFieldConfig = TypedCustomFieldConfig<
     'relation',
     Omit<GraphQLRelationCustomFieldConfig, 'entity' | 'scalarFields'>
-> & { entity: Type<VendureEntity>; graphQLType?: string; eager?: boolean };
+> & {
+    entity: Type<VendureEntity>;
+    graphQLType?: string;
+    eager?: boolean;
+    inverseSide?: string | ((object: any) => any);
+};
+
+// Struct field definitions
+export type BaseTypedStructFieldConfig<T extends StructFieldType, C extends GraphQLStructField> = Omit<
+    C,
+    '__typename' | 'list'
+> & {
+    type: T;
+    ui?: UiComponentConfig<DefaultFormComponentId | string>;
+};
+export type TypedStructSingleFieldConfig<
+    T extends StructFieldType,
+    C extends GraphQLStructField,
+> = BaseTypedStructFieldConfig<T, C> & {
+    list?: false;
+    validate?: (
+        value: DefaultValueType<T>,
+        injector: Injector,
+        ctx: RequestContext,
+    ) => string | LocalizedString[] | void | Promise<string | LocalizedString[] | void>;
+};
+
+export type TypedStructListFieldConfig<
+    T extends StructFieldType,
+    C extends GraphQLStructField,
+> = BaseTypedStructFieldConfig<T, C> & {
+    list?: true;
+    validate?: (
+        value: Array<DefaultValueType<T>>,
+    ) => string | LocalizedString[] | void | Promise<string | LocalizedString[] | void>;
+};
+
+export type TypedStructFieldConfig<
+    T extends StructFieldType,
+    C extends GraphQLStructField,
+> = BaseTypedStructFieldConfig<T, C> &
+    (TypedStructSingleFieldConfig<T, C> | TypedStructListFieldConfig<T, C>);
+
+export type StringStructFieldConfig = TypedStructFieldConfig<'string', GraphQLStringStructFieldConfig>;
+export type TextStructFieldConfig = TypedStructFieldConfig<'text', GraphQLTextStructFieldConfig>;
+export type IntStructFieldConfig = TypedStructFieldConfig<'int', GraphQLIntStructFieldConfig>;
+export type FloatStructFieldConfig = TypedStructFieldConfig<'float', GraphQLFloatStructFieldConfig>;
+export type BooleanStructFieldConfig = TypedStructFieldConfig<'boolean', GraphQLBooleanStructFieldConfig>;
+export type DateTimeStructFieldConfig = TypedStructFieldConfig<'datetime', GraphQLDateTimeStructFieldConfig>;
+
+/**
+ * @description
+ * Configures an individual field of a "struct" custom field. The individual fields share
+ * the same API as the top-level custom fields, with the exception that they do not support the
+ * `readonly`, `internal`, `nullable`, `unique` and `requiresPermission` options.
+ *
+ * @example
+ * ```ts
+ * const customFields: CustomFields = {
+ *   Product: [
+ *     {
+ *       name: 'specifications',
+ *       type: 'struct',
+ *       fields: [
+ *         { name: 'processor', type: 'string' },
+ *         { name: 'ram', type: 'string' },
+ *         { name: 'screenSize', type: 'float' },
+ *       ],
+ *     },
+ *   ],
+ * };
+ * ```
+ *
+ *
+ * @docsCategory custom-fields
+ * @since 3.1.0
+ */
+export type StructFieldConfig =
+    | StringStructFieldConfig
+    | TextStructFieldConfig
+    | IntStructFieldConfig
+    | FloatStructFieldConfig
+    | BooleanStructFieldConfig
+    | DateTimeStructFieldConfig;
+
+/**
+ * @description
+ * Configures a "struct" custom field.
+ *
+ * @docsCategory custom-fields
+ * @since 3.1.0
+ */
+export type StructCustomFieldConfig = TypedCustomFieldConfig<
+    'struct',
+    Omit<GraphQLStructCustomFieldConfig, 'fields'>
+> & {
+    fields: StructFieldConfig[];
+};
 
 /**
  * @description
@@ -103,82 +229,21 @@ export type CustomFieldConfig =
     | StringCustomFieldConfig
     | LocaleStringCustomFieldConfig
     | TextCustomFieldConfig
+    | LocaleTextCustomFieldConfig
     | IntCustomFieldConfig
     | FloatCustomFieldConfig
     | BooleanCustomFieldConfig
     | DateTimeCustomFieldConfig
-    | RelationCustomFieldConfig;
+    | RelationCustomFieldConfig
+    | StructCustomFieldConfig;
 
 /**
  * @description
  * Most entities can have additional fields added to them by defining an array of {@link CustomFieldConfig}
  * objects on against the corresponding key.
  *
- * ### Configuration options
- *
- * All custom fields share some common properties:
- *
- * * `name: string`: The name of the field.
- * * `type: string`: A string of type {@link CustomFieldType}.
- * * `list: boolean`: If set to `true`, then the field will be an array of the specified type.
- * * `label?: LocalizedString[]`: An array of localized labels for the field.
- * * `description?: LocalizedString[]`: An array of localized descriptions for the field.
- * * `public?: boolean`: Whether or not the custom field is available via the Shop API. Defaults to `true`.
- * * `readonly?: boolean`: Whether or not the custom field can be updated via the GraphQL APIs. Defaults to `false`.
- * * `internal?: boolean`: Whether or not the custom field is exposed at all via the GraphQL APIs. Defaults to `false`.
- * * `defaultValue?: any`: The default value when an Entity is created with this field.
- * * `nullable?: boolean`: Whether the field is nullable in the database. If set to `false`, then a `defaultValue` should be provided.
- * * `unique?: boolean`: Whether the value of the field should be unique. When set to `true`, a UNIQUE constraint is added to the column. Defaults
- *     to `false`.
- * * `validate?: (value: any) => string | LocalizedString[] | void`: A custom validation function. If the value is valid, then
- *     the function should not return a value. If a string or LocalizedString array is returned, this is interpreted as an error message.
- *
- * The `LocalizedString` type looks like this:
- *
- * ```TypeScript
- * type LocalizedString = {
- *   languageCode: LanguageCode;
- *   value: string;
- * };
- * ```
- *
- * In addition to the common properties, the following field types have some type-specific properties:
- *
- * #### `string` type
- *
- * * `pattern?: string`: A regex pattern which the field value must match
- * * `options?: { value: string; label?: LocalizedString[]; };`: An array of pre-defined options for the field.
- * * `length?: number`: The max length of the varchar created in the database. Defaults to 255. Maximum is 65,535.
- *
- * #### `localeString` type
- *
- * * `pattern?: string`: A regex pattern which the field value must match
- * * `length?: number`: The max length of the varchar created in the database. Defaults to 255. Maximum is 65,535.
- *
- * #### `int` & `float` type
- *
- * * `min?: number`: The minimum permitted value
- * * `max?: number`: The maximum permitted value
- * * `step?: number`: The step value
- *
- * #### `datetime` type
- *
- * The min, max & step properties for datetime fields are intended to be used as described in
- * [the datetime-local docs](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/datetime-local#Additional_attributes)
- *
- * * `min?: string`: The earliest permitted date
- * * `max?: string`: The latest permitted date
- * * `step?: string`: The step value
- *
- * #### `relation` type
- *
- * * `entity: VendureEntity`: The entity which this custom field is referencing
- * * `eager?: boolean`: Whether to [eagerly load](https://typeorm.io/#/eager-and-lazy-relations) the relation. Defaults to false.
- * * `graphQLType?: string`: The name of the GraphQL type that corresponds to the entity.
- *     Can be omitted if it is the same, which is usually the case.
- *
  * @example
- * ```TypeScript
+ * ```ts
  * bootstrap({
  *     // ...
  *     customFields: {
@@ -196,33 +261,43 @@ export type CustomFieldConfig =
  *
  * @docsCategory custom-fields
  */
-export interface CustomFields {
+export type CustomFields = {
     Address?: CustomFieldConfig[];
     Administrator?: CustomFieldConfig[];
     Asset?: CustomFieldConfig[];
     Channel?: CustomFieldConfig[];
     Collection?: CustomFieldConfig[];
-    Country?: CustomFieldConfig[];
     Customer?: CustomFieldConfig[];
     CustomerGroup?: CustomFieldConfig[];
     Facet?: CustomFieldConfig[];
     FacetValue?: CustomFieldConfig[];
     Fulfillment?: CustomFieldConfig[];
     GlobalSettings?: CustomFieldConfig[];
+    HistoryEntry?: CustomFieldConfig[];
     Order?: CustomFieldConfig[];
     OrderLine?: CustomFieldConfig[];
+    Payment?: CustomFieldConfig[];
     PaymentMethod?: CustomFieldConfig[];
     Product?: CustomFieldConfig[];
     ProductOption?: CustomFieldConfig[];
     ProductOptionGroup?: CustomFieldConfig[];
     ProductVariant?: CustomFieldConfig[];
+    ProductVariantPrice?: CustomFieldConfig[];
     Promotion?: CustomFieldConfig[];
+    Refund?: CustomFieldConfig[];
+    Region?: CustomFieldConfig[];
+    Seller?: CustomFieldConfig[];
+    Session?: CustomFieldConfig[];
+    ShippingLine?: CustomFieldConfig[];
     ShippingMethod?: CustomFieldConfig[];
+    StockLevel?: CustomFieldConfig[];
+    StockLocation?: CustomFieldConfig[];
+    StockMovement?: CustomFieldConfig[];
     TaxCategory?: CustomFieldConfig[];
     TaxRate?: CustomFieldConfig[];
     User?: CustomFieldConfig[];
     Zone?: CustomFieldConfig[];
-}
+} & { [entity: string]: CustomFieldConfig[] };
 
 /**
  * This interface should be implemented by any entity which can be extended

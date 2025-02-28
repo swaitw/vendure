@@ -1,136 +1,215 @@
+import { select, text } from '@clack/prompts';
 import { SUPER_ADMIN_USER_IDENTIFIER, SUPER_ADMIN_USER_PASSWORD } from '@vendure/common/lib/shared-constants';
+import { randomBytes } from 'crypto';
 import fs from 'fs-extra';
 import Handlebars from 'handlebars';
 import path from 'path';
-import prompts, { PromptObject } from 'prompts';
 
-import { DbType, UserResponses } from './types';
+import { checkCancel, isDockerAvailable } from './helpers';
+import { DbType, FileSources, PackageManager, UserResponses } from './types';
 
-// tslint:disable:no-console
+interface PromptAnswers {
+    dbType: DbType;
+    dbHost: string | symbol;
+    dbPort: string | symbol;
+    dbName: string | symbol;
+    dbSchema?: string | symbol;
+    dbUserName: string | symbol;
+    dbPassword: string | symbol;
+    dbSSL?: boolean | symbol;
+    superadminIdentifier: string | symbol;
+    superadminPassword: string | symbol;
+    populateProducts: boolean | symbol;
+}
+
+/* eslint-disable no-console */
+
+export async function getQuickStartConfiguration(
+    root: string,
+    packageManager: PackageManager,
+): Promise<UserResponses> {
+    // First we want to detect whether Docker is running
+    const { result: dockerStatus } = await isDockerAvailable();
+    let usePostgres: boolean;
+    switch (dockerStatus) {
+        case 'running':
+            usePostgres = true;
+            break;
+        case 'not-found':
+            usePostgres = false;
+            break;
+        case 'not-running': {
+            let useSqlite = false;
+            let dockerIsNowRunning = false;
+            do {
+                const useSqliteResponse = await select({
+                    message: 'We could not automatically start Docker. How should we proceed?',
+                    options: [
+                        { label: `Let's use SQLite as the database`, value: true },
+                        { label: 'I have manually started Docker', value: false },
+                    ],
+                    initialValue: true,
+                });
+                checkCancel(useSqlite);
+                useSqlite = useSqliteResponse as boolean;
+                if (useSqlite === false) {
+                    const { result: dockerStatusManual } = await isDockerAvailable();
+                    dockerIsNowRunning = dockerStatusManual === 'running';
+                }
+            } while (dockerIsNowRunning !== true && useSqlite === false);
+            usePostgres = !useSqlite;
+            break;
+        }
+    }
+    const quickStartAnswers: PromptAnswers = {
+        dbType: usePostgres ? 'postgres' : 'sqlite',
+        dbHost: usePostgres ? 'localhost' : '',
+        dbPort: usePostgres ? '6543' : '',
+        dbName: usePostgres ? 'vendure' : '',
+        dbUserName: usePostgres ? 'vendure' : '',
+        dbPassword: usePostgres ? randomBytes(16).toString('base64url') : '',
+        dbSchema: usePostgres ? 'public' : '',
+        populateProducts: true,
+        superadminIdentifier: SUPER_ADMIN_USER_IDENTIFIER,
+        superadminPassword: SUPER_ADMIN_USER_PASSWORD,
+    };
+
+    const responses = {
+        ...(await generateSources(root, quickStartAnswers, packageManager)),
+        dbType: quickStartAnswers.dbType,
+        populateProducts: quickStartAnswers.populateProducts as boolean,
+        superadminIdentifier: quickStartAnswers.superadminIdentifier as string,
+        superadminPassword: quickStartAnswers.superadminPassword as string,
+    };
+
+    return responses;
+}
 
 /**
  * Prompts the user to determine how the new Vendure app should be configured.
  */
-export async function gatherUserResponses(root: string): Promise<UserResponses> {
-    function onSubmit(prompt: PromptObject, answer: any) {
-        if (prompt.name === 'dbType') {
-            dbType = answer;
-        }
-    }
-
-    let dbType: DbType;
-
-    const answers = await prompts(
-        [
-            {
-                type: 'select',
-                name: 'dbType',
-                message: 'Which database are you using?',
-                choices: [
-                    { title: 'MySQL', value: 'mysql' },
-                    { title: 'MariaDB', value: 'mariadb' },
-                    { title: 'Postgres', value: 'postgres' },
-                    { title: 'SQLite', value: 'sqlite' },
-                    { title: 'SQL.js', value: 'sqljs' },
-                    // Don't show these until they have been tested.
-                    // { title: 'MS SQL Server', value: 'mssql' },
-                    // { title: 'Oracle', value: 'oracle' },
-                ],
-                initial: 0 as any,
-            },
-            {
-                type: (() => (dbType === 'sqlite' || dbType === 'sqljs' ? null : 'text')) as any,
-                name: 'dbHost',
-                message: `What's the database host address?`,
-                initial: 'localhost',
-            },
-            {
-                type: (() => (dbType === 'sqlite' || dbType === 'sqljs' ? null : 'text')) as any,
-                name: 'dbPort',
-                message: `What port is the database listening on?`,
-                initial: (() => defaultDBPort(dbType)) as any,
-            },
-            {
-                type: (() => (dbType === 'sqlite' || dbType === 'sqljs' ? null : 'text')) as any,
-                name: 'dbName',
-                message: `What's the name of the database?`,
-                initial: 'vendure',
-            },
-            {
-                type: (() => (dbType === 'sqlite' || dbType === 'sqljs' ? null : 'text')) as any,
-                name: 'dbUserName',
-                message: `What's the database user name?`,
-                initial: 'root',
-            },
-            {
-                type: (() => (dbType === 'sqlite' || dbType === 'sqljs' ? null : 'password')) as any,
-                name: 'dbPassword',
-                message: `What's the database password?`,
-            },
-            {
-                type: 'select',
-                name: 'language',
-                message: 'Which programming language will you be using?',
-                choices: [
-                    { title: 'TypeScript', value: 'ts' },
-                    { title: 'JavaScript', value: 'js' },
-                ],
-                initial: 0 as any,
-            },
-            {
-                type: 'toggle',
-                name: 'populateProducts',
-                message: 'Populate with some sample product data?',
-                initial: true,
-                active: 'yes',
-                inactive: 'no',
-            },
-            {
-                type: 'text',
-                name: 'superadminIdentifier',
-                message: 'What identifier do you want to use for the superadmin user?',
-                initial: SUPER_ADMIN_USER_IDENTIFIER,
-            },
-            {
-                type: 'text',
-                name: 'superadminPassword',
-                message: 'What password do you want to use for the superadmin user?',
-                initial: SUPER_ADMIN_USER_PASSWORD,
-            },
+export async function getManualConfiguration(
+    root: string,
+    packageManager: PackageManager,
+): Promise<UserResponses> {
+    const dbType = (await select({
+        message: 'Which database are you using?',
+        options: [
+            { label: 'MySQL', value: 'mysql' },
+            { label: 'MariaDB', value: 'mariadb' },
+            { label: 'Postgres', value: 'postgres' },
+            { label: 'SQLite', value: 'sqlite' },
         ],
-        {
-            onSubmit,
-            onCancel() {
-                /* */
-            },
-        },
-    );
+        initialValue: 'sqlite' as DbType,
+    })) as DbType;
+    checkCancel(dbType);
 
-    if (!answers.language) {
-        console.log('Setup aborted. No changes made');
-        process.exit(0);
-    }
+    const hasConnection = dbType !== 'sqlite';
+    const dbHost = hasConnection
+        ? await text({
+              message: "What's the database host address?",
+              initialValue: 'localhost',
+          })
+        : '';
+    checkCancel(dbHost);
+    const dbPort = hasConnection
+        ? await text({
+              message: 'What port is the database listening on?',
+              initialValue: defaultDBPort(dbType).toString(),
+          })
+        : '';
+    checkCancel(dbPort);
+    const dbName = hasConnection
+        ? await text({
+              message: "What's the name of the database?",
+              initialValue: 'vendure',
+          })
+        : '';
+    checkCancel(dbName);
+    const dbSchema =
+        dbType === 'postgres'
+            ? await text({
+                  message: "What's the schema name we should use?",
+                  initialValue: 'public',
+              })
+            : '';
+    checkCancel(dbSchema);
+    const dbSSL =
+        dbType === 'postgres'
+            ? await select({
+                  message:
+                      'Use SSL to connect to the database? (only enable if your database provider supports SSL)',
+                  options: [
+                      { label: 'no', value: false },
+                      { label: 'yes', value: true },
+                  ],
+                  initialValue: false,
+              })
+            : false;
+    checkCancel(dbSSL);
+    const dbUserName = hasConnection
+        ? await text({
+              message: "What's the database user name?",
+          })
+        : '';
+    checkCancel(dbUserName);
+    const dbPassword = hasConnection
+        ? await text({
+              message: "What's the database password?",
+              defaultValue: '',
+          })
+        : '';
+    checkCancel(dbPassword);
+    const superadminIdentifier = await text({
+        message: 'What identifier do you want to use for the superadmin user?',
+        initialValue: SUPER_ADMIN_USER_IDENTIFIER,
+    });
+    checkCancel(superadminIdentifier);
+    const superadminPassword = await text({
+        message: 'What password do you want to use for the superadmin user?',
+        initialValue: SUPER_ADMIN_USER_PASSWORD,
+    });
+    checkCancel(superadminPassword);
+    const populateProducts = await select({
+        message: 'Populate with some sample product data?',
+        options: [
+            { label: 'yes', value: true },
+            { label: 'no', value: false },
+        ],
+        initialValue: true,
+    });
+    checkCancel(populateProducts);
 
-    const { indexSource, indexWorkerSource, configSource, migrationSource, readmeSource } =
-        await generateSources(root, answers);
+    const answers: PromptAnswers = {
+        dbType,
+        dbHost,
+        dbPort,
+        dbName,
+        dbSchema,
+        dbUserName,
+        dbPassword,
+        dbSSL,
+        superadminIdentifier,
+        superadminPassword,
+        populateProducts,
+    };
+
     return {
-        indexSource,
-        indexWorkerSource,
-        configSource,
-        migrationSource,
-        readmeSource,
-        usingTs: answers.language === 'ts',
-        dbType: answers.dbType,
-        populateProducts: answers.populateProducts,
-        superadminIdentifier: answers.superadminIdentifier,
-        superadminPassword: answers.superadminPassword,
+        ...(await generateSources(root, answers, packageManager)),
+        dbType,
+        populateProducts: answers.populateProducts as boolean,
+        superadminIdentifier: answers.superadminIdentifier as string,
+        superadminPassword: answers.superadminPassword as string,
     };
 }
 
 /**
  * Returns mock "user response" without prompting, for use in CI
  */
-export async function gatherCiUserResponses(root: string): Promise<UserResponses> {
+export async function getCiConfiguration(
+    root: string,
+    packageManager: PackageManager,
+): Promise<UserResponses> {
     const ciAnswers = {
         dbType: 'sqlite' as const,
         dbHost: '',
@@ -138,20 +217,13 @@ export async function gatherCiUserResponses(root: string): Promise<UserResponses
         dbName: 'vendure',
         dbUserName: '',
         dbPassword: '',
-        language: 'ts',
         populateProducts: true,
         superadminIdentifier: SUPER_ADMIN_USER_IDENTIFIER,
         superadminPassword: SUPER_ADMIN_USER_PASSWORD,
     };
-    const { indexSource, indexWorkerSource, configSource, migrationSource, readmeSource } =
-        await generateSources(root, ciAnswers);
+
     return {
-        indexSource,
-        indexWorkerSource,
-        configSource,
-        migrationSource,
-        readmeSource,
-        usingTs: ciAnswers.language === 'ts',
+        ...(await generateSources(root, ciAnswers, packageManager)),
         dbType: ciAnswers.dbType,
         populateProducts: ciAnswers.populateProducts,
         superadminIdentifier: ciAnswers.superadminIdentifier,
@@ -164,14 +236,9 @@ export async function gatherCiUserResponses(root: string): Promise<UserResponses
  */
 async function generateSources(
     root: string,
-    answers: any,
-): Promise<{
-    indexSource: string;
-    indexWorkerSource: string;
-    configSource: string;
-    migrationSource: string;
-    readmeSource: string;
-}> {
+    answers: PromptAnswers,
+    packageManager: PackageManager,
+): Promise<FileSources> {
     const assetPath = (fileName: string) => path.join(__dirname, '../assets', fileName);
 
     /**
@@ -180,29 +247,33 @@ async function generateSources(
      * Instead, we disable escaping and use this custom helper to escape only the single quote character.
      */
     Handlebars.registerHelper('escapeSingle', (aString: unknown) => {
-        return typeof aString === 'string' ? aString.replace(/'/g, `\\'`) : aString;
+        return typeof aString === 'string' ? aString.replace(/'/g, "\\'") : aString;
     });
 
     const templateContext = {
         ...answers,
         dbType: answers.dbType === 'sqlite' ? 'better-sqlite3' : answers.dbType,
         name: path.basename(root),
-        isTs: answers.language === 'ts',
         isSQLite: answers.dbType === 'sqlite',
-        isSQLjs: answers.dbType === 'sqljs',
-        requiresConnection: answers.dbType !== 'sqlite' && answers.dbType !== 'sqljs',
+        requiresConnection: answers.dbType !== 'sqlite',
+        cookieSecret: randomBytes(16).toString('base64url'),
     };
-    const configTemplate = await fs.readFile(assetPath('vendure-config.hbs'), 'utf-8');
-    const configSource = Handlebars.compile(configTemplate, { noEscape: true })(templateContext);
-    const indexTemplate = await fs.readFile(assetPath('index.hbs'), 'utf-8');
-    const indexSource = Handlebars.compile(indexTemplate)(templateContext);
-    const indexWorkerTemplate = await fs.readFile(assetPath('index-worker.hbs'), 'utf-8');
-    const indexWorkerSource = Handlebars.compile(indexWorkerTemplate)(templateContext);
-    const migrationTemplate = await fs.readFile(assetPath('migration.hbs'), 'utf-8');
-    const migrationSource = Handlebars.compile(migrationTemplate)(templateContext);
-    const readmeTemplate = await fs.readFile(assetPath('readme.hbs'), 'utf-8');
-    const readmeSource = Handlebars.compile(readmeTemplate)(templateContext);
-    return { indexSource, indexWorkerSource, configSource, migrationSource, readmeSource };
+
+    async function createSourceFile(filename: string, noEscape = false): Promise<string> {
+        const template = await fs.readFile(assetPath(filename), 'utf-8');
+        return Handlebars.compile(template, { noEscape })(templateContext);
+    }
+
+    return {
+        indexSource: await createSourceFile('index.hbs'),
+        indexWorkerSource: await createSourceFile('index-worker.hbs'),
+        configSource: await createSourceFile('vendure-config.hbs', true),
+        envSource: await createSourceFile('.env.hbs', true),
+        envDtsSource: await createSourceFile('environment.d.hbs', true),
+        readmeSource: await createSourceFile('readme.hbs'),
+        dockerfileSource: await createSourceFile('Dockerfile.hbs'),
+        dockerComposeSource: await createSourceFile('docker-compose.hbs'),
+    };
 }
 
 function defaultDBPort(dbType: DbType): number {
@@ -212,10 +283,6 @@ function defaultDBPort(dbType: DbType): number {
             return 3306;
         case 'postgres':
             return 5432;
-        case 'mssql':
-            return 1433;
-        case 'oracle':
-            return 1521;
         default:
             return 3306;
     }

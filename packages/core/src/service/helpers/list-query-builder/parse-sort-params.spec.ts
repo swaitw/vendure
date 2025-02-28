@@ -1,10 +1,12 @@
 import { Type } from '@vendure/common/lib/shared-types';
+import { fail } from 'assert';
 import { DefaultNamingStrategy } from 'typeorm';
 import { ColumnMetadata } from 'typeorm/metadata/ColumnMetadata';
 import { RelationMetadata } from 'typeorm/metadata/RelationMetadata';
+import { describe, expect, it } from 'vitest';
 
 import { SortParameter } from '../../../common/types/common-types';
-import { CustomFieldConfig } from '../../../config/index';
+import { CustomFieldConfig } from '../../../config/custom-field/custom-field-types';
 import { ProductTranslation } from '../../../entity/product/product-translation.entity';
 import { Product } from '../../../entity/product/product.entity';
 import { I18nError } from '../../../i18n/i18n-error';
@@ -72,7 +74,7 @@ describe('parseSortParams()', () => {
         const result = parseSortParams(connection as any, Product, sortParams);
         expect(result).toEqual({
             'product.id': 'ASC',
-            'product_translations.name': 'DESC',
+            'product__translations.name': 'DESC',
         });
     });
 
@@ -110,7 +112,7 @@ describe('parseSortParams()', () => {
             productCustomFields,
         );
         expect(result).toEqual({
-            'product_translations.customFields.shortName': 'ASC',
+            'product__translations.customFields.shortName': 'ASC',
         });
     });
 
@@ -131,7 +133,7 @@ describe('parseSortParams()', () => {
         try {
             parseSortParams(connection as any, Product, sortParams);
             fail('should not get here');
-        } catch (e) {
+        } catch (e: any) {
             expect(e instanceof I18nError).toBe(true);
             expect(e.message).toBe('error.invalid-sort-field');
             expect(e.variables.fieldName).toBe('invalid');

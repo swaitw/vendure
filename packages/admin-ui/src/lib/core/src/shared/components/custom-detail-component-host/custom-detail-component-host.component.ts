@@ -9,7 +9,7 @@ import {
     OnInit,
     ViewContainerRef,
 } from '@angular/core';
-import { FormGroup } from '@angular/forms';
+import { UntypedFormGroup } from '@angular/forms';
 import { Observable } from 'rxjs';
 
 import { CustomDetailComponentLocationId } from '../../../common/component-registry-types';
@@ -25,14 +25,14 @@ import { CustomDetailComponentService } from '../../../providers/custom-detail-c
 export class CustomDetailComponentHostComponent implements OnInit, OnDestroy {
     @Input() locationId: CustomDetailComponentLocationId;
     @Input() entity$: Observable<any>;
-    @Input() detailForm: FormGroup;
+    @Input() detailForm: UntypedFormGroup;
 
     private componentRefs: Array<ComponentRef<CustomDetailComponent>> = [];
 
     constructor(
         private viewContainerRef: ViewContainerRef,
-        private componentFactoryResolver: ComponentFactoryResolver,
         private customDetailComponentService: CustomDetailComponentService,
+        private injector: Injector,
     ) {}
 
     ngOnInit(): void {
@@ -41,8 +41,12 @@ export class CustomDetailComponentHostComponent implements OnInit, OnDestroy {
         );
 
         for (const config of customComponents) {
-            const factory = this.componentFactoryResolver.resolveComponentFactory(config.component);
-            const componentRef = this.viewContainerRef.createComponent(factory);
+            const componentRef = this.viewContainerRef.createComponent(config.component, {
+                injector: Injector.create({
+                    parent: this.injector,
+                    providers: config.providers ?? [],
+                }),
+            });
             componentRef.instance.entity$ = this.entity$;
             componentRef.instance.detailForm = this.detailForm;
             this.componentRefs.push(componentRef);

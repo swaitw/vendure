@@ -1,5 +1,5 @@
-import { Component, ComponentFactory, Input, OnInit, ViewChild, ViewContainerRef } from '@angular/core';
-import { FormGroup } from '@angular/forms';
+import { Component, Input, OnInit } from '@angular/core';
+import { UntypedFormGroup } from '@angular/forms';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
@@ -8,7 +8,6 @@ import { CustomFieldConfig, CustomFieldsFragment, LanguageCode } from '../../../
 import { DataService } from '../../../data/providers/data.service';
 import {
     CustomFieldComponentService,
-    CustomFieldControl,
     CustomFieldEntityName,
 } from '../../../providers/custom-field-component/custom-field-component.service';
 
@@ -23,16 +22,12 @@ import {
 })
 export class CustomFieldControlComponent implements OnInit {
     @Input() entityName: CustomFieldEntityName;
-    @Input('customFieldsFormGroup') formGroup: FormGroup;
+    @Input('customFieldsFormGroup') formGroup: UntypedFormGroup;
     @Input() customField: CustomFieldsFragment;
     @Input() compact = false;
     @Input() showLabel = true;
     @Input() readonly = false;
     hasCustomControl = false;
-    @ViewChild('customComponentPlaceholder', { read: ViewContainerRef })
-    private customComponentPlaceholder: ViewContainerRef;
-
-    private customComponentFactory: ComponentFactory<CustomFieldControl> | undefined;
     uiLanguage$: Observable<LanguageCode>;
 
     constructor(

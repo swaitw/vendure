@@ -22,12 +22,18 @@ export const COLLECTION_FRAGMENT = gql`
         description
         isPrivate
         languageCode
+        breadcrumbs {
+            id
+            name
+            slug
+        }
         featuredAsset {
             ...Asset
         }
         assets {
             ...Asset
         }
+        inheritFilters
         filters {
             ...ConfigurableOperation
         }
@@ -51,35 +57,41 @@ export const COLLECTION_FRAGMENT = gql`
     ${CONFIGURABLE_OPERATION_FRAGMENT}
 `;
 
-export const GET_COLLECTION_LIST = gql`
-    query GetCollectionList($options: CollectionListOptions) {
-        collections(options: $options) {
-            items {
-                id
-                name
-                slug
-                description
-                isPrivate
-                featuredAsset {
-                    ...Asset
-                }
-                parent {
-                    id
-                }
-            }
-            totalItems
+export const COLLECTION_FOR_LIST_FRAGMENT = gql`
+    fragment CollectionForList on Collection {
+        id
+        createdAt
+        updatedAt
+        name
+        slug
+        position
+        isPrivate
+        breadcrumbs {
+            id
+            name
+            slug
+        }
+        featuredAsset {
+            ...Asset
+        }
+        parentId
+        children {
+            id
         }
     }
     ${ASSET_FRAGMENT}
 `;
 
-export const GET_COLLECTION = gql`
-    query GetCollection($id: ID!) {
-        collection(id: $id) {
-            ...Collection
+export const GET_COLLECTION_LIST = gql`
+    query GetCollectionList($options: CollectionListOptions) {
+        collections(options: $options) {
+            items {
+                ...CollectionForList
+            }
+            totalItems
         }
     }
-    ${COLLECTION_FRAGMENT}
+    ${COLLECTION_FOR_LIST_FRAGMENT}
 `;
 
 export const CREATE_COLLECTION = gql`
@@ -118,6 +130,15 @@ export const DELETE_COLLECTION = gql`
     }
 `;
 
+export const DELETE_COLLECTIONS = gql`
+    mutation DeleteCollections($ids: [ID!]!) {
+        deleteCollections(ids: $ids) {
+            result
+            message
+        }
+    }
+`;
+
 export const GET_COLLECTION_CONTENTS = gql`
     query GetCollectionContents($id: ID!, $options: ProductVariantListOptions) {
         collection(id: $id) {
@@ -126,6 +147,8 @@ export const GET_COLLECTION_CONTENTS = gql`
             productVariants(options: $options) {
                 items {
                     id
+                    createdAt
+                    updatedAt
                     productId
                     name
                     sku
@@ -144,11 +167,31 @@ export const PREVIEW_COLLECTION_CONTENTS = gql`
         previewCollectionVariants(input: $input, options: $options) {
             items {
                 id
+                createdAt
+                updatedAt
                 productId
                 name
                 sku
             }
             totalItems
+        }
+    }
+`;
+
+export const ASSIGN_COLLECTIONS_TO_CHANNEL = gql`
+    mutation AssignCollectionsToChannel($input: AssignCollectionsToChannelInput!) {
+        assignCollectionsToChannel(input: $input) {
+            id
+            name
+        }
+    }
+`;
+
+export const REMOVE_COLLECTIONS_FROM_CHANNEL = gql`
+    mutation RemoveCollectionsFromChannel($input: RemoveCollectionsFromChannelInput!) {
+        removeCollectionsFromChannel(input: $input) {
+            id
+            name
         }
     }
 `;

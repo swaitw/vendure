@@ -11,7 +11,7 @@ import {
 } from '@vendure/core';
 import { BraintreeGateway } from 'braintree';
 
-import { extractMetadataFromTransaction, getGateway } from './braintree-common';
+import { defaultExtractMetadataFn, getGateway } from './braintree-common';
 import { BRAINTREE_PLUGIN_OPTIONS, loggerCtx } from './constants';
 import { BraintreePluginOptions } from './types';
 
@@ -41,14 +41,19 @@ export const braintreePaymentMethodHandler = new PaymentMethodHandler({
         try {
             await entityHydrator.hydrate(ctx, order, { relations: ['customer'] });
             const customer = order.customer;
-            if (options.storeCustomersInBraintree && ctx.activeUserId && customer) {
+            if (
+                options.storeCustomersInBraintree &&
+                ctx.activeUserId &&
+                customer &&
+                metadata.includeCustomerId !== false
+            ) {
                 customerId = await getBraintreeCustomerId(ctx, gateway, customer);
             }
-            return processPayment(ctx, gateway, order, amount, metadata.nonce, customerId);
-        } catch (e) {
+            return processPayment(ctx, gateway, order, amount, metadata.nonce, customerId, options);
+        } catch (e: any) {
             Logger.error(e, loggerCtx);
             return {
-                amount: order.total,
+                amount,
                 state: 'Error' as const,
                 transactionId: '',
                 errorMessage: e.toString(),
@@ -88,6 +93,7 @@ async function processPayment(
     amount: number,
     paymentMethodNonce: any,
     customerId: string | undefined,
+    pluginOptions: BraintreePluginOptions,
 ) {
     const response = await gateway.transaction.sale({
         customerId,
@@ -99,20 +105,22 @@ async function processPayment(
             storeInVaultOnSuccess: !!customerId,
         },
     });
+    const extractMetadataFn = pluginOptions.extractMetadata ?? defaultExtractMetadataFn;
+    const metadata = response.transaction && extractMetadataFn(response.transaction);
     if (!response.success) {
         return {
             amount,
             state: 'Declined' as const,
-            transactionId: response.transaction.id,
+            transactionId: response.transaction?.id,
             errorMessage: response.message,
-            metadata: extractMetadataFromTransaction(response.transaction),
+            metadata,
         };
     }
     return {
         amount,
         state: 'Settled' as const,
         transactionId: response.transaction.id,
-        metadata: extractMetadataFromTransaction(response.transaction),
+        metadata,
     };
 }
 
@@ -144,7 +152,7 @@ async function getBraintreeCustomerId(
                 );
                 Logger.debug(JSON.stringify(result.errors, null, 2), loggerCtx);
             }
-        } catch (e) {
+        } catch (e: any) {
             Logger.error(e.message, loggerCtx, e.stack);
         }
     } else {

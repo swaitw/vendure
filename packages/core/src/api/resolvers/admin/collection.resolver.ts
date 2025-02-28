@@ -2,9 +2,12 @@ import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import {
     ConfigurableOperationDefinition,
     DeletionResponse,
+    MutationAssignCollectionsToChannelArgs,
     MutationCreateCollectionArgs,
     MutationDeleteCollectionArgs,
+    MutationDeleteCollectionsArgs,
     MutationMoveCollectionArgs,
+    MutationRemoveCollectionsFromChannelArgs,
     MutationUpdateCollectionArgs,
     Permission,
     QueryCollectionArgs,
@@ -48,13 +51,13 @@ export class CollectionResolver {
     async collections(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryCollectionsArgs,
-        @Relations({ entity: Collection, omit: ['productVariants', 'assets'] })
+        @Relations({
+            entity: Collection,
+            omit: ['productVariants', 'assets', 'parent.productVariants', 'children.productVariants'],
+        })
         relations: RelationPaths<Collection>,
     ): Promise<PaginatedList<Translated<Collection>>> {
-        return this.collectionService.findAll(ctx, args.options || undefined, relations).then(res => {
-            res.items.forEach(this.encodeFilters);
-            return res;
-        });
+        return this.collectionService.findAll(ctx, args.options || undefined, relations);
     }
 
     @Query()
@@ -62,22 +65,24 @@ export class CollectionResolver {
     async collection(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryCollectionArgs,
-        @Relations({ entity: Collection, omit: ['productVariants', 'assets'] })
+        @Relations({
+            entity: Collection,
+            omit: ['productVariants', 'assets', 'parent.productVariants', 'children.productVariants'],
+        })
         relations: RelationPaths<Collection>,
     ): Promise<Translated<Collection> | undefined> {
         let collection: Translated<Collection> | undefined;
         if (args.id) {
             collection = await this.collectionService.findOne(ctx, args.id, relations);
             if (args.slug && collection && collection.slug !== args.slug) {
-                throw new UserInputError(`error.collection-id-slug-mismatch`);
+                throw new UserInputError('error.collection-id-slug-mismatch');
             }
         } else if (args.slug) {
             collection = await this.collectionService.findOneBySlug(ctx, args.slug, relations);
         } else {
-            throw new UserInputError(`error.collection-id-or-slug-must-be-provided`);
+            throw new UserInputError('error.collection-id-or-slug-must-be-provided');
         }
-
-        return this.encodeFilters(collection);
+        return collection;
     }
 
     @Query()
@@ -96,7 +101,8 @@ export class CollectionResolver {
     ): Promise<Translated<Collection>> {
         const { input } = args;
         this.configurableOperationCodec.decodeConfigurableOperationIds(CollectionFilter, input.filters);
-        return this.collectionService.create(ctx, input).then(this.encodeFilters);
+        const collection = await this.collectionService.create(ctx, input);
+        return collection;
     }
 
     @Transaction()
@@ -108,7 +114,7 @@ export class CollectionResolver {
     ): Promise<Translated<Collection>> {
         const { input } = args;
         this.configurableOperationCodec.decodeConfigurableOperationIds(CollectionFilter, input.filters || []);
-        return this.collectionService.update(ctx, input).then(this.encodeFilters);
+        return this.collectionService.update(ctx, input);
     }
 
     @Transaction()
@@ -119,7 +125,7 @@ export class CollectionResolver {
         @Args() args: MutationMoveCollectionArgs,
     ): Promise<Translated<Collection>> {
         const { input } = args;
-        return this.collectionService.move(ctx, input).then(this.encodeFilters);
+        return this.collectionService.move(ctx, input);
     }
 
     @Transaction()
@@ -132,16 +138,33 @@ export class CollectionResolver {
         return this.collectionService.delete(ctx, args.id);
     }
 
-    /**
-     * Encodes any entity IDs used in the filter arguments.
-     */
-    private encodeFilters = <T extends Collection | undefined>(collection: T): T => {
-        if (collection) {
-            this.configurableOperationCodec.encodeConfigurableOperationIds(
-                CollectionFilter,
-                collection.filters,
-            );
-        }
-        return collection;
-    };
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.DeleteCatalog, Permission.DeleteCollection)
+    async deleteCollections(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationDeleteCollectionsArgs,
+    ): Promise<DeletionResponse[]> {
+        return Promise.all(args.ids.map(id => this.collectionService.delete(ctx, id)));
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.CreateCatalog, Permission.CreateCollection)
+    async assignCollectionsToChannel(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationAssignCollectionsToChannelArgs,
+    ): Promise<Array<Translated<Collection>>> {
+        return await this.collectionService.assignCollectionsToChannel(ctx, args.input);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.DeleteCatalog, Permission.DeleteCollection)
+    async removeCollectionsFromChannel(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationRemoveCollectionsFromChannelArgs,
+    ): Promise<Array<Translated<Collection>>> {
+        return await this.collectionService.removeCollectionsFromChannel(ctx, args.input);
+    }
 }

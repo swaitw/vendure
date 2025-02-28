@@ -4,7 +4,8 @@ export type Extension =
     | AdminUiExtension
     | TranslationExtension
     | StaticAssetExtension
-    | GlobalStylesExtension;
+    | GlobalStylesExtension
+    | SassVariableOverridesExtension;
 
 /**
  * @description
@@ -23,7 +24,7 @@ export interface TranslationExtension {
      * translation files in JSON format.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * translations: {
      *   en: path.join(__dirname, 'translations/*.en.json'),
      *   de: path.join(__dirname, 'translations/*.de.json'),
@@ -67,11 +68,59 @@ export interface GlobalStylesExtension {
 
 /**
  * @description
+ * Defines an extension which allows overriding Clarity Design System's Sass variables used in styles on the Admin UI.
+ *
+ * @docsCategory UiDevkit
+ * @docsPage AdminUiExtension
+ */
+export interface SassVariableOverridesExtension {
+    /**
+     * @description
+     * Specifies a path to a Sass style file containing variable declarations, which will take precedence over
+     * default values defined in Clarity.
+     */
+    sassVariableOverrides: string;
+}
+
+/**
+ * @description
+ * Defines a route which will be added to the Admin UI application.
+ *
+ * @docsCategory UiDevkit
+ * @docsPage AdminUiExtension
+ */
+export interface UiExtensionRouteDefinition {
+    /**
+     * @description
+     * The name of the route. This will be used as the path in the URL.
+     */
+    route: string;
+    /**
+     * @description
+     * The path to the file which exports an array of Angular route definitions.
+     */
+    filePath: string;
+    /**
+     * @description
+     * All extensions will be mounted under the `/extensions/` route. This option allows you to specify a
+     * custom prefix rather than `/extensions/`. For example, setting this to `custom` would cause the extension
+     * to be mounted at `/custom/<route>` instead.
+     *
+     * A common use case for this is to mount the extension at the root of the Admin UI, by setting this to an empty string.
+     * This is useful when the extension is intended to replace the default Admin UI, rather than extend it.
+     *
+     * @since 2.2.0
+     */
+    prefix?: string;
+}
+
+/**
+ * @description
  * Defines extensions to the Admin UI application by specifying additional
  * Angular [NgModules](https://angular.io/guide/ngmodules) which are compiled
  * into the application.
  *
- * See [Extending the Admin UI](/docs/plugins/extending-the-admin-ui/) for
+ * See [Extending the Admin UI](/guides/extending-the-admin-ui/getting-started/) for
  * detailed instructions.
  *
  * @docsCategory UiDevkit
@@ -96,11 +145,128 @@ export interface AdminUiExtension
      * scss style sheets etc.
      */
     extensionPath: string;
+
     /**
      * @description
      * One or more Angular modules which extend the default Admin UI.
+     *
+     * @deprecated use `routes` instead of lazy modules, and `providers` instead of shared modules in combination
+     * with Angular standalone components.
      */
-    ngModules: Array<AdminUiExtensionSharedModule | AdminUiExtensionLazyModule>;
+    ngModules?: Array<AdminUiExtensionSharedModule | AdminUiExtensionLazyModule>;
+
+    /**
+     * @description
+     * Defines the paths to a file that exports an array of shared providers such as nav menu items, custom form inputs,
+     * custom detail components, action bar items, custom history entry components.
+     */
+    providers?: string[];
+
+    /**
+     * @description
+     * Defines routes that will be lazy-loaded at the `/extensions/` route. The filePath should point to a file
+     * relative to the `extensionPath` which exports an array of Angular route definitions.
+     */
+    routes?: UiExtensionRouteDefinition[];
+
+    /**
+     * @description
+     * An optional alias for the module so it can be referenced by other UI extension modules.
+     *
+     * By default, Angular modules declared in an AdminUiExtension do not have access to code outside the directory
+     * defined by the `extensionPath`. A scenario in which that can be useful though is in a monorepo codebase where
+     * a common NgModule is shared across different plugins, each defined in its own package. An example can be found
+     * below - note that the main `tsconfig.json` also maps the target module but using a path relative to the project's
+     * root folder. The UI module is not part of the main TypeScript build task as explained in
+     * [Extending the Admin UI](https://www.vendure.io/docs/plugins/extending-the-admin-ui/) but having `paths`
+     * properly configured helps with usual IDE code editing features such as code completion and quick navigation, as
+     * well as linting.
+     *
+     * @example
+     * ```ts title="packages/common-ui-module/src/ui/ui-shared.module.ts"
+     * import { NgModule } from '\@angular/core';
+     * import { SharedModule } from '\@vendure/admin-ui/core';
+     * import { CommonUiComponent } from './components/common-ui/common-ui.component';
+     *
+     * export { CommonUiComponent };
+     *
+     * \@NgModule({
+     *  imports: [SharedModule],
+     *  exports: [CommonUiComponent],
+     *  declarations: [CommonUiComponent],
+     * })
+     * export class CommonSharedUiModule {}
+     * ```
+     *
+     * ```ts title="packages/common-ui-module/src/index.ts"
+     * import path from 'path';
+     *
+     * import { AdminUiExtension } from '\@vendure/ui-devkit/compiler';
+     *
+     * export const uiExtensions: AdminUiExtension = {
+     *   // highlight-next-line
+     *   pathAlias: '\@common-ui-module',     // this is the important part
+     *   extensionPath: path.join(__dirname, 'ui'),
+     *   ngModules: [
+     *     {
+     *       type: 'shared' as const,
+     *       ngModuleFileName: 'ui-shared.module.ts',
+     *       ngModuleName: 'CommonSharedUiModule',
+     *     },
+     *   ],
+     * };
+     * ```
+     *
+     * ```json title="tsconfig.json"
+     * {
+     *   "compilerOptions": {
+     *     "baseUrl": ".",
+     *     "paths": {
+     *       // highlight-next-line
+     *       "\@common-ui-module/*": ["packages/common-ui-module/src/ui/*"]
+     *     }
+     *   }
+     * }
+     * ```
+     *
+     * ```ts title="packages/sample-plugin/src/ui/ui-extension.module.ts"
+     * import { NgModule } from '\@angular/core';
+     * import { SharedModule } from '\@vendure/admin-ui/core';
+     * // highlight-start
+     * // the import below works both in the context of the custom Admin UI app as well as the main project
+     * // '\@common-ui-module' is the value of "pathAlias" and 'ui-shared.module' is the file we want to reference inside "extensionPath"
+     * import { CommonSharedUiModule, CommonUiComponent } from '\@common-ui-module/ui-shared.module';
+     * // highlight-end
+     *
+     * \@NgModule({
+     *   imports: [
+     *     SharedModule,
+     *     CommonSharedUiModule,
+     *     RouterModule.forChild([
+     *       {
+     *         path: '',
+     *         pathMatch: 'full',
+     *         component: CommonUiComponent,
+     *       },
+     *     ]),
+     *   ],
+     * })
+     * export class SampleUiExtensionModule {}
+     * ```
+     */
+    pathAlias?: string;
+
+    /**
+     * @description
+     * Optional array specifying filenames or [glob](https://github.com/isaacs/node-glob) patterns that should
+     * be skipped when copying the directory defined by `extensionPath`.
+     *
+     * @example
+     * ```ts
+     * exclude: ['**\/*.spec.ts']
+     * ```
+     */
+    exclude?: string[];
 }
 
 /**
@@ -176,10 +342,18 @@ export interface AdminUiExtensionLazyModule {
 /**
  * @description
  * Argument to configure process (watch or compile)
- * 
+ *
  * @docsCategory UiDevkit
  */
-export type UiExtensionCompilerProcessArgument = string | [string, any]
+export type UiExtensionCompilerProcessArgument = string | [string, any];
+
+/**
+ * @description
+ * The package manager to use when invoking the Angular CLI to build UI extensions.
+ *
+ * @docsCategory UiDevkit
+ */
+export type UiExtensionBuildCommand = 'npm' | 'yarn' | 'pnpm';
 
 /**
  * @description
@@ -201,6 +375,27 @@ export interface UiExtensionCompilerOptions {
     extensions: Extension[];
     /**
      * @description
+     * Allows you to manually specify the path to the Angular CLI compiler script. This can be useful in scenarios
+     * where for some reason the built-in start/build scripts are unable to locate the `ng` command.
+     *
+     * This option should not usually be required.
+     *
+     * @example
+     * ```ts
+     * compileUiExtensions({
+     *     ngCompilerPath: path.join(__dirname, '../../node_modules/@angular/cli/bin/ng.js'),
+     *     outputPath: path.join(__dirname, '../admin-ui'),
+     *     extensions: [
+     *       // ...
+     *     ],
+     * })
+     * ```
+     *
+     * @since 2.1.0
+     */
+    ngCompilerPath?: string | undefined;
+    /**
+     * @description
      * Set to `true` in order to compile the Admin UI in development mode (using the Angular CLI
      * [ng serve](https://angular.io/cli/serve) command). When in dev mode, any changes to
      * UI extension files will be watched and trigger a rebuild of the Admin UI with live
@@ -215,6 +410,23 @@ export interface UiExtensionCompilerOptions {
      * of the app, for example with the default value of `'/admin/'`, the Admin UI app
      * will be configured to be served from `http://<host>/admin/`.
      *
+     * Note: if you are using this in conjunction with the {@link AdminUiPlugin} then you should
+     * also set the `route` option to match this value.
+     *
+     * @example
+     * ```ts
+     * AdminUiPlugin.init({
+     *   route: 'my-route',
+     *   port: 5001,
+     *   app: compileUiExtensions({
+     *     baseHref: '/my-route/',
+     *     outputPath: path.join(__dirname, './custom-admin-ui'),
+     *     extensions: [],
+     *     devMode: true,
+     *   }),
+     * }),
+     * ```
+     *
      * @default '/admin/'
      */
     baseHref?: string;
@@ -226,27 +438,27 @@ export interface UiExtensionCompilerOptions {
      * @default 4200 | undefined
      */
     watchPort?: number;
-    
+
     /**
      * @description
      * Internally, the Angular CLI will be invoked as an npm script. By default, the compiler will use Yarn
      * to run the script if it is detected, otherwise it will use npm. This setting allows you to explicitly
-     * set which command to use, rather than relying on the default behavior.
+     * set which command to use, including pnpm, rather than relying on the default behavior.
      *
      * @since 1.5.0
      */
-    command?: 'yarn' | 'npm';
+    command?: UiExtensionBuildCommand;
 
     /**
      * @description
-     * Additional command-line arguments which will get passed to the [ng build](https://angular.io/cli/build) 
+     * Additional command-line arguments which will get passed to the [ng build](https://angular.io/cli/build)
      * command (or [ng serve](https://angular.io/cli/serve) if `devMode = true`).
-     * 
+     *
      * @example
      * ['--disable-host-check'] // to disable host check
-     * 
+     *
      * @default undefined
-     * 
+     *
      * @since 1.5.0
      */
     additionalProcessArguments?: UiExtensionCompilerProcessArgument[];
@@ -262,4 +474,8 @@ export interface BrandingOptions {
     smallLogoPath?: string;
     largeLogoPath?: string;
     faviconPath?: string;
+}
+
+export interface AdminUiExtensionWithId extends AdminUiExtension {
+    id: string;
 }

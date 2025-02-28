@@ -1,8 +1,7 @@
 import { LanguageCode } from '@vendure/common/lib/generated-types';
 
-import { TransactionalConnection } from '../../../connection/transactional-connection';
+import { FacetValueChecker } from '../../../service/helpers/facet-value-checker/facet-value-checker';
 import { PromotionItemAction } from '../promotion-action';
-import { FacetValueChecker } from '../utils/facet-value-checker';
 
 let facetValueChecker: FacetValueChecker;
 
@@ -10,7 +9,7 @@ export const discountOnItemWithFacets = new PromotionItemAction({
     code: 'facet_based_discount',
     args: {
         discount: {
-            type: 'int',
+            type: 'float',
             ui: {
                 component: 'number-form-input',
                 suffix: '%',
@@ -23,9 +22,9 @@ export const discountOnItemWithFacets = new PromotionItemAction({
         },
     },
     init(injector) {
-        facetValueChecker = new FacetValueChecker(injector.get(TransactionalConnection));
+        facetValueChecker = injector.get(FacetValueChecker);
     },
-    async execute(ctx, orderItem, orderLine, args) {
+    async execute(ctx, orderLine, args) {
         if (await facetValueChecker.hasFacetValues(orderLine, args.facets, ctx)) {
             const unitPrice = ctx.channel.pricesIncludeTax ? orderLine.unitPriceWithTax : orderLine.unitPrice;
             return -unitPrice * (args.discount / 100);

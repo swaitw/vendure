@@ -9,10 +9,15 @@ import { LanguageCode } from '../../common/generated-types';
     providedIn: 'root',
 })
 export class I18nService {
+    _availableLocales: string[] = [];
     _availableLanguages: LanguageCode[] = [];
 
     get availableLanguages(): LanguageCode[] {
         return [...this._availableLanguages];
+    }
+
+    get availableLocales(): string[] {
+        return [...this._availableLocales];
     }
 
     constructor(private ngxTranslate: TranslateService, @Inject(DOCUMENT) private document: Document) {}
@@ -42,9 +47,30 @@ export class I18nService {
     }
 
     /**
+     * Set the available UI locales
+     */
+    setAvailableLocales(locales: string[]) {
+        this._availableLocales = locales;
+    }
+
+    /**
      * Translate the given key.
      */
     translate(key: string | string[], params?: any): string {
         return this.ngxTranslate.instant(key, params);
+    }
+
+    /**
+     * Returns true if the given language code is a right-to-left language.
+     */
+    isRTL(languageCode: LanguageCode): boolean {
+        const rtlLanguageCodes = [
+            LanguageCode.ar,
+            LanguageCode.he,
+            LanguageCode.fa,
+            LanguageCode.ur,
+            LanguageCode.ps,
+        ];
+        return rtlLanguageCodes.includes(languageCode);
     }
 }

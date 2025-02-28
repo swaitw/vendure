@@ -1,5 +1,5 @@
-import { DeepPartial } from '@vendure/common/lib/shared-types';
-import { Column, Entity, JoinTable, ManyToMany, ManyToOne, OneToMany } from 'typeorm';
+import { DeepPartial, ID } from '@vendure/common/lib/shared-types';
+import { Column, Entity, Index, JoinTable, ManyToMany, ManyToOne, OneToMany } from 'typeorm';
 
 import { ChannelAware, SoftDeletable } from '../../common/types/common-types';
 import { LocaleString, Translatable, Translation } from '../../common/types/locale-types';
@@ -8,6 +8,7 @@ import { Asset } from '../asset/asset.entity';
 import { VendureEntity } from '../base/base.entity';
 import { Channel } from '../channel/channel.entity';
 import { CustomProductFields } from '../custom-entity-fields';
+import { EntityId } from '../entity-id.decorator';
 import { FacetValue } from '../facet-value/facet-value.entity';
 import { ProductOptionGroup } from '../product-option-group/product-option-group.entity';
 import { ProductVariant } from '../product-variant/product-variant.entity';
@@ -25,7 +26,8 @@ import { ProductTranslation } from './product-translation.entity';
 @Entity()
 export class Product
     extends VendureEntity
-    implements Translatable, HasCustomFields, ChannelAware, SoftDeletable {
+    implements Translatable, HasCustomFields, ChannelAware, SoftDeletable
+{
     constructor(input?: DeepPartial<Product>) {
         super(input);
     }
@@ -42,8 +44,12 @@ export class Product
     @Column({ default: true })
     enabled: boolean;
 
-    @ManyToOne(type => Asset, { onDelete: 'SET NULL' })
+    @Index()
+    @ManyToOne(type => Asset, asset => asset.featuredInProducts, { onDelete: 'SET NULL' })
     featuredAsset: Asset;
+
+    @EntityId({ nullable: true })
+    featuredAssetId: ID;
 
     @OneToMany(type => ProductAsset, productAsset => productAsset.product)
     assets: ProductAsset[];
@@ -57,14 +63,14 @@ export class Product
     @OneToMany(type => ProductOptionGroup, optionGroup => optionGroup.product)
     optionGroups: ProductOptionGroup[];
 
-    @ManyToMany(type => FacetValue)
+    @ManyToMany(type => FacetValue, facetValue => facetValue.products)
     @JoinTable()
     facetValues: FacetValue[];
 
-    @Column(type => CustomProductFields)
-    customFields: CustomProductFields;
-
-    @ManyToMany(type => Channel)
+    @ManyToMany(type => Channel, channel => channel.products)
     @JoinTable()
     channels: Channel[];
+
+    @Column(type => CustomProductFields)
+    customFields: CustomProductFields;
 }

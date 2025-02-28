@@ -55,7 +55,7 @@ export class FulltextSearchService {
     ): Promise<Omit<Omit<SearchResponse, 'facetValues'>, 'collections'>> {
         const items = await this._searchStrategy.getSearchResults(ctx, input, enabledOnly);
         const totalItems = await this._searchStrategy.getTotalCount(ctx, input, enabledOnly);
-        this.eventBus.publish(new SearchEvent(ctx, input));
+        await this.eventBus.publish(new SearchEvent(ctx, input));
 
         return {
             items,
@@ -111,12 +111,13 @@ export class FulltextSearchService {
      * Sets the SearchStrategy appropriate to th configured database type.
      */
     private setSearchStrategy() {
-        if (this.options.searchStategy) {
-            this._searchStrategy = this.options.searchStategy;
+        if (this.options.searchStrategy) {
+            this._searchStrategy = this.options.searchStrategy;
         } else {
             switch (this.connection.rawConnection.options.type) {
                 case 'mysql':
                 case 'mariadb':
+                case 'aurora-mysql':
                     this._searchStrategy = new MysqlSearchStrategy();
                     break;
                 case 'sqlite':
@@ -125,10 +126,12 @@ export class FulltextSearchService {
                     this._searchStrategy = new SqliteSearchStrategy();
                     break;
                 case 'postgres':
+                case 'aurora-postgres':
+                case 'cockroachdb':
                     this._searchStrategy = new PostgresSearchStrategy();
                     break;
                 default:
-                    throw new InternalServerError(`error.database-not-supported-by-default-search-plugin`);
+                    throw new InternalServerError('error.database-not-supported-by-default-search-plugin');
             }
         }
     }

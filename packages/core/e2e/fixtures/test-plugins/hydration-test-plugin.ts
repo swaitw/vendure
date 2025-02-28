@@ -1,9 +1,10 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { Args, Query, Resolver } from '@nestjs/graphql';
 import {
     Asset,
     ChannelService,
     Ctx,
+    DeepPartial,
     EntityHydrator,
     ID,
     LanguageCode,
@@ -14,9 +15,11 @@ import {
     ProductVariantService,
     RequestContext,
     TransactionalConnection,
+    VendureEntity,
     VendurePlugin,
 } from '@vendure/core';
 import gql from 'graphql-tag';
+import { Entity, ManyToOne, OneToMany } from 'typeorm';
 
 @Resolver()
 export class TestAdminPluginResolver {
@@ -31,10 +34,11 @@ export class TestAdminPluginResolver {
 
     @Query()
     async hydrateProduct(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
-        const product = await this.connection.getRepository(ctx, Product).findOne(args.id, {
+        const product = await this.connection.getRepository(ctx, Product).findOne({
+            where: { id: args.id },
             relations: ['facetValues'],
         });
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         await this.entityHydrator.hydrate(ctx, product!, {
             relations: [
                 'variants.options',
@@ -52,8 +56,8 @@ export class TestAdminPluginResolver {
     // Test case for https://github.com/vendure-ecommerce/vendure/issues/1153
     @Query()
     async hydrateProductAsset(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
-        const product = await this.connection.getRepository(ctx, Product).findOne(args.id);
-        // tslint:disable-next-line:no-non-null-assertion
+        const product = await this.connection.getRepository(ctx, Product).findOne({ where: { id: args.id } });
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         await this.entityHydrator.hydrate(ctx, product!, {
             relations: ['assets'],
         });
@@ -124,10 +128,89 @@ export class TestAdminPluginResolver {
         });
         return channel;
     }
+
+    @Query()
+    async hydrateChannelWithNestedRelation(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
+        const channel = await this.channelService.findOne(ctx, args.id);
+        await this.entityHydrator.hydrate(ctx, channel!, {
+            relations: [
+                'customFields.thumb',
+                'customFields.additionalConfig',
+                'customFields.additionalConfig.backgroundImage',
+            ],
+        });
+        return channel;
+    }
+
+    @Query()
+    async hydrateChannelWithVeryLongPropertyName(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
+        const channel = await this.channelService.findOne(ctx, args.id);
+        await this.entityHydrator.hydrate(ctx, channel!, {
+            relations: ['customFields.additionalConfig.treeEntity'],
+        });
+
+        // Make sure we start on a tree entity to make use of tree-relations-qb-joiner.ts
+        await Promise.all(
+            ((channel!.customFields as any).additionalConfig.treeEntity as TreeEntity[]).map(treeEntity =>
+                this.entityHydrator.hydrate(ctx, treeEntity, {
+                    relations: [
+                        'childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself',
+                        'childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself',
+                        'childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself.image1',
+                        'childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself.image2',
+                    ],
+                }),
+            ),
+        );
+
+        return channel;
+    }
+}
+
+@Entity()
+export class AdditionalConfig extends VendureEntity {
+    constructor(input?: DeepPartial<AdditionalConfig>) {
+        super(input);
+    }
+
+    @ManyToOne(() => Asset, { onDelete: 'SET NULL', nullable: true })
+    backgroundImage: Asset;
+
+    @OneToMany(() => TreeEntity, entity => entity.additionalConfig)
+    treeEntity: TreeEntity[];
+}
+
+@Entity()
+export class TreeEntity extends VendureEntity {
+    constructor(input?: DeepPartial<TreeEntity>) {
+        super(input);
+    }
+
+    @ManyToOne(() => AdditionalConfig, e => e.treeEntity, { nullable: true })
+    additionalConfig: AdditionalConfig;
+
+    @OneToMany(() => TreeEntity, entity => entity.parent)
+    childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself: TreeEntity[];
+
+    @ManyToOne(
+        () => TreeEntity,
+        entity => entity.childrenPropertyWithAVeryLongNameThatExceedsPostgresLimitsEasilyByItself,
+        {
+            nullable: true,
+        },
+    )
+    parent: TreeEntity;
+
+    @ManyToOne(() => Asset)
+    image1: Asset;
+
+    @ManyToOne(() => Asset)
+    image2: Asset;
 }
 
 @VendurePlugin({
     imports: [PluginCommonModule],
+    entities: [AdditionalConfig, TreeEntity],
     adminApiExtensions: {
         resolvers: [TestAdminPluginResolver],
         schema: gql`
@@ -139,11 +222,20 @@ export class TestAdminPluginResolver {
                 hydrateOrder(id: ID!): JSON
                 hydrateOrderReturnQuantities(id: ID!): JSON
                 hydrateChannel(id: ID!): JSON
+                hydrateChannelWithNestedRelation(id: ID!): JSON
+                hydrateChannelWithVeryLongPropertyName(id: ID!): JSON
             }
         `,
     },
     configuration: config => {
         config.customFields.Channel.push({ name: 'thumb', type: 'relation', entity: Asset, nullable: true });
+        config.customFields.Channel.push({
+            name: 'additionalConfig',
+            type: 'relation',
+            entity: AdditionalConfig,
+            graphQLType: 'JSON',
+            nullable: true,
+        });
         return config;
     },
 })

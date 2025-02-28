@@ -1,13 +1,19 @@
-import { OnApplicationBootstrap } from '@nestjs/common';
+import { Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Args, Query, Resolver } from '@nestjs/graphql';
 import { LanguageCode } from '@vendure/common/lib/generated-types';
 import { DeepPartial, ID } from '@vendure/common/lib/shared-types';
 import {
     Ctx,
+    Customer,
+    CustomerService,
+    HasCustomFields,
     ListQueryBuilder,
     LocaleString,
+    Order,
+    OrderService,
     PluginCommonModule,
     RequestContext,
+    RequestContextService,
     TransactionalConnection,
     Translatable,
     translateDeep,
@@ -16,13 +22,46 @@ import {
     VendurePlugin,
 } from '@vendure/core';
 import gql from 'graphql-tag';
-import { Column, Entity, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, JoinColumn, JoinTable, ManyToOne, OneToMany, OneToOne, Relation } from 'typeorm';
 
 import { Calculated } from '../../../src/common/calculated-decorator';
-import { EntityId } from '../../../src/entity/entity-id.decorator';
 
 @Entity()
-export class TestEntity extends VendureEntity implements Translatable {
+export class CustomFieldRelationTestEntity extends VendureEntity {
+    constructor(input: Partial<CustomFieldRelationTestEntity>) {
+        super(input);
+    }
+
+    @Column()
+    data: string;
+
+    @ManyToOne(() => TestEntity, testEntity => testEntity.customFields.relation)
+    parent: Relation<TestEntity>;
+}
+
+@Entity()
+export class CustomFieldOtherRelationTestEntity extends VendureEntity {
+    constructor(input: Partial<CustomFieldOtherRelationTestEntity>) {
+        super(input);
+    }
+
+    @Column()
+    data: string;
+
+    @ManyToOne(() => TestEntity, testEntity => testEntity.customFields.otherRelation)
+    parent: Relation<TestEntity>;
+}
+
+class TestEntityCustomFields {
+    @OneToMany(() => CustomFieldRelationTestEntity, child => child.parent)
+    relation: Relation<CustomFieldRelationTestEntity[]>;
+
+    @OneToMany(() => CustomFieldOtherRelationTestEntity, child => child.parent)
+    otherRelation: Relation<CustomFieldOtherRelationTestEntity[]>;
+}
+
+@Entity()
+export class TestEntity extends VendureEntity implements Translatable, HasCustomFields {
     constructor(input: Partial<TestEntity>) {
         super(input);
     }
@@ -83,6 +122,34 @@ export class TestEntity extends VendureEntity implements Translatable {
 
     @OneToMany(type => TestEntityTranslation, translation => translation.base, { eager: true })
     translations: Array<Translation<TestEntity>>;
+
+    @OneToOne(type => Order)
+    @JoinColumn()
+    orderRelation: Order;
+
+    @Column({ nullable: true })
+    nullableString: string;
+
+    @Column({ nullable: true })
+    nullableBoolean: boolean;
+
+    @Column({ nullable: true })
+    nullableNumber: number;
+
+    @Column('varchar', { nullable: true })
+    nullableId: ID;
+
+    @Column({ nullable: true })
+    nullableDate: Date;
+
+    @Column(() => TestEntityCustomFields)
+    customFields: TestEntityCustomFields;
+
+    @ManyToOne(() => TestEntity, (type) => type.parent)
+    parent: TestEntity | null;
+
+    @Column('int', { nullable: true })
+    parentId: ID | null;
 }
 
 @Entity()
@@ -97,6 +164,8 @@ export class TestEntityTranslation extends VendureEntity implements Translation<
 
     @ManyToOne(type => TestEntity, base => base.translations)
     base: TestEntity;
+
+    customFields: never;
 }
 
 @Entity()
@@ -122,17 +191,29 @@ export class ListQueryResolver {
     @Query()
     testEntities(@Ctx() ctx: RequestContext, @Args() args: any) {
         return this.listQueryBuilder
-            .build(TestEntity, args.options, { ctx })
+            .build(TestEntity, args.options, {
+                ctx,
+                relations: [
+                    'parent',
+                    'orderRelation',
+                    'orderRelation.customer',
+                    'customFields.relation',
+                    'customFields.otherRelation',
+                ],
+                customPropertyMap: {
+                    customerLastName: 'orderRelation.customer.lastName',
+                },
+            })
             .getManyAndCount()
             .then(([items, totalItems]) => {
                 for (const item of items) {
                     if (item.prices && item.prices.length) {
-                        // tslint:disable-next-line:no-non-null-assertion
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                         item.activePrice = item.prices.find(p => p.channelId === 1)!.price;
                     }
                 }
                 return {
-                    items: items.map(i => translateDeep(i, ctx.languageCode)),
+                    items: items.map(i => translateDeep(i, ctx.languageCode, ['parent'])),
                     totalItems,
                 };
             });
@@ -141,16 +222,16 @@ export class ListQueryResolver {
     @Query()
     testEntitiesGetMany(@Ctx() ctx: RequestContext, @Args() args: any) {
         return this.listQueryBuilder
-            .build(TestEntity, args.options, { ctx, relations: ['prices'] })
+            .build(TestEntity, args.options, { ctx, relations: ['prices', 'parent'] })
             .getMany()
             .then(items => {
                 for (const item of items) {
                     if (item.prices && item.prices.length) {
-                        // tslint:disable-next-line:no-non-null-assertion
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                         item.activePrice = item.prices.find(p => p.channelId === 1)!.price;
                     }
                 }
-                return items.map(i => translateDeep(i, ctx.languageCode));
+                return items.map(i => translateDeep(i, ctx.languageCode, ['parent']));
             });
     }
 }
@@ -162,6 +243,21 @@ const apiExtensions = gql`
         updatedAt: DateTime!
         languageCode: LanguageCode!
         name: String!
+    }
+
+    type CustomFieldRelationTestEntity implements Node {
+        id: ID!
+        data: String!
+    }
+
+    type CustomFieldOtherRelationTestEntity implements Node {
+        id: ID!
+        data: String!
+    }
+
+    type TestEntityCustomFields {
+        relation: [CustomFieldRelationTestEntity!]!
+        otherRelation: [CustomFieldOtherRelationTestEntity!]!
     }
 
     type TestEntity implements Node {
@@ -178,6 +274,14 @@ const apiExtensions = gql`
         price: Int!
         ownerId: ID!
         translations: [TestEntityTranslation!]!
+        orderRelation: Order
+        nullableString: String
+        nullableBoolean: Boolean
+        nullableNumber: Int
+        nullableId: ID
+        nullableDate: DateTime
+        customFields: TestEntityCustomFields!
+        parent: TestEntity
     }
 
     type TestEntityList implements PaginatedList {
@@ -190,12 +294,26 @@ const apiExtensions = gql`
         testEntitiesGetMany(options: TestEntityListOptions): [TestEntity!]!
     }
 
+    input TestEntityFilterParameter {
+        customerLastName: StringOperators
+    }
+
+    input TestEntitySortParameter {
+        customerLastName: SortOrder
+    }
+
     input TestEntityListOptions
 `;
 
 @VendurePlugin({
     imports: [PluginCommonModule],
-    entities: [TestEntity, TestEntityPrice, TestEntityTranslation],
+    entities: [
+        TestEntity,
+        TestEntityPrice,
+        TestEntityTranslation,
+        CustomFieldRelationTestEntity,
+        CustomFieldOtherRelationTestEntity,
+    ],
     adminApiExtensions: {
         schema: apiExtensions,
         resolvers: [ListQueryResolver],
@@ -206,12 +324,17 @@ const apiExtensions = gql`
     },
 })
 export class ListQueryPlugin implements OnApplicationBootstrap {
-    constructor(private connection: TransactionalConnection) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private requestContextService: RequestContextService,
+        private customerService: CustomerService,
+        private orderService: OrderService,
+    ) {}
 
     async onApplicationBootstrap() {
-        const count = await this.connection.getRepository(TestEntity).count();
+        const count = await this.connection.rawConnection.getRepository(TestEntity).count();
         if (count === 0) {
-            const testEntities = await this.connection.getRepository(TestEntity).save([
+            const testEntities = await this.connection.rawConnection.getRepository(TestEntity).save([
                 new TestEntity({
                     label: 'A',
                     description: 'Lorem ipsum', // 11
@@ -219,6 +342,11 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                     active: true,
                     order: 0,
                     ownerId: 10,
+                    nullableString: 'lorem',
+                    nullableBoolean: true,
+                    nullableNumber: 42,
+                    nullableId: 123,
+                    nullableDate: new Date('2022-01-05T10:00:00.000Z'),
                 }),
                 new TestEntity({
                     label: 'B',
@@ -235,6 +363,11 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                     active: false,
                     order: 2,
                     ownerId: 12,
+                    nullableString: 'lorem',
+                    nullableBoolean: true,
+                    nullableNumber: 42,
+                    nullableId: 123,
+                    nullableDate: new Date('2022-01-05T10:00:00.000Z'),
                 }),
                 new TestEntity({
                     label: 'D',
@@ -251,6 +384,11 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                     active: false,
                     order: 4,
                     ownerId: 14,
+                    nullableString: 'lorem',
+                    nullableBoolean: true,
+                    nullableNumber: 42,
+                    nullableId: 123,
+                    nullableDate: new Date('2022-01-05T10:00:00.000Z'),
                 }),
                 new TestEntity({
                     label: 'F',
@@ -262,6 +400,11 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                 }),
             ]);
 
+            // test entity with self-referencing relation without tree structure decorator
+            testEntities[0].parent = testEntities[1];
+            testEntities[3].parent = testEntities[1];
+            await this.connection.rawConnection.getRepository(TestEntity).save([testEntities[0], testEntities[3]]);
+
             const translations: any = {
                 A: { [LanguageCode.en]: 'apple', [LanguageCode.de]: 'apfel' },
                 B: { [LanguageCode.en]: 'bike', [LanguageCode.de]: 'fahrrad' },
@@ -271,8 +414,14 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                 F: { [LanguageCode.de]: 'baum' },
             };
 
+            const nestedData: Record<string, Array<{ data: string }>> = {
+                A: [{ data: 'A' }],
+                B: [{ data: 'B' }],
+                C: [{ data: 'C' }],
+            };
+
             for (const testEntity of testEntities) {
-                await this.connection.getRepository(TestEntityPrice).save([
+                await this.connection.rawConnection.getRepository(TestEntityPrice).save([
                     new TestEntityPrice({
                         price: testEntity.description.length,
                         channelId: 1,
@@ -288,7 +437,7 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                 for (const code of [LanguageCode.en, LanguageCode.de]) {
                     const translation = translations[testEntity.label][code];
                     if (translation) {
-                        await this.connection.getRepository(TestEntityTranslation).save(
+                        await this.connection.rawConnection.getRepository(TestEntityTranslation).save(
                             new TestEntityTranslation({
                                 name: translation,
                                 base: testEntity,
@@ -297,6 +446,41 @@ export class ListQueryPlugin implements OnApplicationBootstrap {
                         );
                     }
                 }
+
+                if (nestedData[testEntity.label]) {
+                    for (const nestedContent of nestedData[testEntity.label]) {
+                        await this.connection.rawConnection.getRepository(CustomFieldRelationTestEntity).save(
+                            new CustomFieldRelationTestEntity({
+                                parent: testEntity,
+                                data: nestedContent.data,
+                            }),
+                        );
+                        await this.connection.rawConnection.getRepository(CustomFieldOtherRelationTestEntity).save(
+                            new CustomFieldOtherRelationTestEntity({
+                                parent: testEntity,
+                                data: nestedContent.data,
+                            }),
+                        );
+                    }
+                }
+            }
+        } else {
+            const testEntities = await this.connection.rawConnection.getRepository(TestEntity).find();
+            const ctx = await this.requestContextService.create({ apiType: 'admin' });
+            const customers = await this.connection.rawConnection.getRepository(Customer).find();
+            let i = 0;
+
+            for (const testEntity of testEntities) {
+                const customer = customers[i % customers.length];
+                try {
+                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                    const order = await this.orderService.create(ctx, customer.user!.id);
+                    testEntity.orderRelation = order;
+                    await this.connection.rawConnection.getRepository(TestEntity).save(testEntity);
+                } catch (e: any) {
+                    Logger.error(e);
+                }
+                i++;
             }
         }
     }

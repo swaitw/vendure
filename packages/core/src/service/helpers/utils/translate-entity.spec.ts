@@ -1,15 +1,16 @@
 import { LanguageCode } from '@vendure/common/lib/generated-types';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Translatable, Translation } from '../../../common/types/locale-types';
 import { VendureEntity } from '../../../entity/base/base.entity';
 import { CollectionTranslation } from '../../../entity/collection/collection-translation.entity';
 import { Collection } from '../../../entity/collection/collection.entity';
+import { ProductTranslation } from '../../../entity/product/product-translation.entity';
+import { Product } from '../../../entity/product/product.entity';
 import { ProductOptionTranslation } from '../../../entity/product-option/product-option-translation.entity';
 import { ProductOption } from '../../../entity/product-option/product-option.entity';
 import { ProductVariantTranslation } from '../../../entity/product-variant/product-variant-translation.entity';
 import { ProductVariant } from '../../../entity/product-variant/product-variant.entity';
-import { ProductTranslation } from '../../../entity/product/product-translation.entity';
-import { Product } from '../../../entity/product/product.entity';
 
 import { translateDeep, translateEntity, translateTree } from './translate-entity';
 
@@ -221,13 +222,19 @@ describe('translateDeep()', () => {
 
     it('should not throw if first-level nested entity is not defined', () => {
         testProduct.singleRealVariant = undefined as any;
-        expect(() => translateDeep(testProduct, [LanguageCode.en, LanguageCode.en], ['singleRealVariant'])).not.toThrow();
+        expect(() =>
+            translateDeep(testProduct, [LanguageCode.en, LanguageCode.en], ['singleRealVariant']),
+        ).not.toThrow();
     });
 
     it('should not throw if second-level nested entity is not defined', () => {
         testProduct.singleRealVariant.options = undefined as any;
         expect(() =>
-            translateDeep(testProduct, [LanguageCode.en, LanguageCode.en], [['singleRealVariant', 'options']]),
+            translateDeep(
+                testProduct,
+                [LanguageCode.en, LanguageCode.en],
+                [['singleRealVariant', 'options']],
+            ),
         ).not.toThrow();
     });
 
@@ -245,19 +252,31 @@ describe('translateDeep()', () => {
     });
 
     it('should translate a second-level nested non-array entity', () => {
-        const result = translateDeep(testProduct, [LanguageCode.en, LanguageCode.en], [['singleTestVariant', 'singleOption']]);
+        const result = translateDeep(
+            testProduct,
+            [LanguageCode.en, LanguageCode.en],
+            [['singleTestVariant', 'singleOption']],
+        );
 
         expect(result.singleTestVariant.singleOption).toHaveProperty('name', OPTION_NAME_EN);
     });
 
     it('should translate a second-level nested entity array (first-level is not array)', () => {
-        const result = translateDeep(testProduct, [LanguageCode.en, LanguageCode.en], [['singleRealVariant', 'options']]);
+        const result = translateDeep(
+            testProduct,
+            [LanguageCode.en, LanguageCode.en],
+            [['singleRealVariant', 'options']],
+        );
 
         expect(result.singleRealVariant.options[0]).toHaveProperty('name', OPTION_NAME_EN);
     });
 
     it('should translate a second-level nested entity array', () => {
-        const result = translateDeep(product, [LanguageCode.en, LanguageCode.en], ['variants', ['variants', 'options']]);
+        const result = translateDeep(
+            product,
+            [LanguageCode.en, LanguageCode.en],
+            ['variants', ['variants', 'options']],
+        );
 
         expect(result).toHaveProperty('name', PRODUCT_NAME_EN);
         expect(result.variants[0]).toHaveProperty('name', VARIANT_NAME_EN);

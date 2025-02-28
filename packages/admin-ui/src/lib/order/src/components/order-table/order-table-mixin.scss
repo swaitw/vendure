@@ -18,6 +18,10 @@
         border-top-color: var(--color-grey-200);
     }
 
+    img {
+        border-radius: var(--border-radius-img);
+    }
+
     .order-line-custom-fields {
         display: flex;
         flex-wrap: wrap;
@@ -28,8 +32,12 @@
             overflow: hidden;
             text-overflow: ellipsis;
             margin-bottom: 6px;
-            margin-right: 18px;
+            margin-inline-end: 18px;
         }
+    }
+
+    .draft-qty {
+        max-width: 48px;
     }
 
     .order-line-custom-field {
@@ -43,6 +51,7 @@
     .net-price {
         font-size: 11px;
         color: var(--color-text-300);
+        line-height: 14px;
     }
     .promotions-label {
         text-decoration: underline dotted var(--color-text-200);
@@ -54,5 +63,14 @@
     .thumb img {
         width: 50px;
         height: 50px;
+    }
+    .shipping-method-name {
+        font-size: var(--font-size-xs);
+        margin-inline-end: 2px;
+    }
+    .order-placed-quantity {
+        text-decoration: line-through;
+        color: var(--color-text-300);
+        margin-inline-end: 2px;
     }
 }

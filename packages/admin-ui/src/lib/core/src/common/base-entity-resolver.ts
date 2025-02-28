@@ -1,7 +1,6 @@
 import {
     ActivatedRouteSnapshot,
     ActivationStart,
-    Resolve,
     ResolveData,
     Router,
     RouterStateSnapshot,
@@ -30,11 +29,11 @@ export function createResolveData<T extends BaseEntityResolver<R>, R>(
  * {@link BaseDetailComponent}.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * \@Injectable({
  *   providedIn: 'root',
  * })
- * export class MyEntityResolver extends BaseEntityResolver<MyEntity.Fragment> {
+ * export class MyEntityResolver extends BaseEntityResolver<MyEntityFragment> {
  *   constructor(router: Router, dataService: DataService) {
  *     super(
  *       router,
@@ -53,7 +52,7 @@ export function createResolveData<T extends BaseEntityResolver<R>, R>(
  *
  * @docsCategory list-detail-views
  */
-export class BaseEntityResolver<T> implements Resolve<Observable<T>> {
+export class BaseEntityResolver<T> {
     constructor(
         protected router: Router,
         private readonly emptyEntity: T,

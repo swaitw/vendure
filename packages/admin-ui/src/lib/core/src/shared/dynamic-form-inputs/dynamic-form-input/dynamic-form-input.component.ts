@@ -4,14 +4,13 @@ import {
     ChangeDetectionStrategy,
     ChangeDetectorRef,
     Component,
-    ComponentFactory,
-    ComponentFactoryResolver,
     ComponentRef,
     Injector,
     Input,
     OnChanges,
     OnDestroy,
     OnInit,
+    Provider,
     QueryList,
     SimpleChanges,
     Type,
@@ -19,10 +18,17 @@ import {
     ViewChildren,
     ViewContainerRef,
 } from '@angular/core';
-import { ControlValueAccessor, FormArray, FormControl, NG_VALUE_ACCESSOR } from '@angular/forms';
+import {
+    ControlValueAccessor,
+    FormArray,
+    FormControl,
+    NG_VALUE_ACCESSOR,
+    UntypedFormArray,
+    UntypedFormControl,
+} from '@angular/forms';
 import { StringCustomFieldConfig } from '@vendure/common/lib/generated-types';
 import { ConfigArgType, CustomFieldType, DefaultFormComponentId } from '@vendure/common/lib/shared-types';
-import { assertNever } from '@vendure/common/lib/shared-utils';
+import { assertNever, notNullOrUndefined } from '@vendure/common/lib/shared-utils';
 import { simpleDeepClone } from '@vendure/common/lib/simple-deep-clone';
 import { Subject, Subscription } from 'rxjs';
 import { switchMap, take, takeUntil } from 'rxjs/operators';
@@ -35,7 +41,7 @@ import { ComponentRegistryService } from '../../../providers/component-registry/
 type InputListItem = {
     id: number;
     componentRef?: ComponentRef<FormInputComponent>;
-    control: FormControl;
+    control: UntypedFormControl;
 };
 
 /**
@@ -59,34 +65,35 @@ export class DynamicFormInputComponent
 {
     @Input() def: ConfigArgDefinition | CustomFieldConfig;
     @Input() readonly: boolean;
-    @Input() control: FormControl;
+    @Input() control: UntypedFormControl;
     @ViewChild('single', { read: ViewContainerRef }) singleViewContainer: ViewContainerRef;
     @ViewChildren('listItem', { read: ViewContainerRef }) listItemContainers: QueryList<ViewContainerRef>;
     renderAsList = false;
     listItems: InputListItem[] = [];
     private singleComponentRef: ComponentRef<FormInputComponent>;
     private listId = 1;
-    private listFormArray = new FormArray([]);
+    private listFormArray = new FormArray([] as Array<FormControl<any>>);
     private componentType: Type<FormInputComponent>;
+    private componentProviders: Provider[] = [];
     private onChange: (val: any) => void;
     private onTouch: () => void;
-    private renderList$ = new Subject();
-    private destroy$ = new Subject();
+    private renderList$ = new Subject<void>();
+    private destroy$ = new Subject<void>();
 
     constructor(
         private componentRegistryService: ComponentRegistryService,
-        private componentFactoryResolver: ComponentFactoryResolver,
         private changeDetectorRef: ChangeDetectorRef,
         private injector: Injector,
     ) {}
 
     ngOnInit() {
         const componentId = this.getInputComponentConfig(this.def).component;
-        const componentType = this.componentRegistryService.getInputComponent(componentId);
-        if (componentType) {
-            this.componentType = componentType;
+        const component = this.componentRegistryService.getInputComponent(componentId);
+        if (component) {
+            this.componentType = component.type;
+            this.componentProviders = component.providers;
         } else {
-            // tslint:disable-next-line:no-console
+            // eslint-disable-next-line no-console
             console.error(
                 `No form input component registered with the id "${componentId}". Using the default input instead.`,
             );
@@ -94,17 +101,20 @@ export class DynamicFormInputComponent
                 this.getInputComponentConfig({ ...this.def, ui: undefined } as any).component,
             );
             if (defaultComponentType) {
-                this.componentType = defaultComponentType;
+                this.componentType = defaultComponentType.type;
             }
         }
     }
 
     ngAfterViewInit() {
         if (this.componentType) {
-            const factory = this.componentFactoryResolver.resolveComponentFactory(this.componentType);
+            const injector = Injector.create({
+                providers: this.componentProviders,
+                parent: this.injector,
+            });
 
             // create a temp instance to check the value of `isListInput`
-            const cmpRef = factory.create(this.injector);
+            const cmpRef = this.singleViewContainer.createComponent(this.componentType, { injector });
             const isListInputComponent = cmpRef.instance.isListInput ?? false;
             cmpRef.destroy();
 
@@ -116,7 +126,7 @@ export class DynamicFormInputComponent
             this.renderAsList = this.def.list && !isListInputComponent;
             if (!this.renderAsList) {
                 this.singleComponentRef = this.renderInputComponent(
-                    factory,
+                    injector,
                     this.singleViewContainer,
                     this.control,
                 );
@@ -127,14 +137,14 @@ export class DynamicFormInputComponent
                         if (formArraySub) {
                             formArraySub.unsubscribe();
                         }
-                        this.listFormArray = new FormArray([]);
+                        this.listFormArray = new UntypedFormArray([]);
                         this.listItems.forEach(i => i.componentRef?.destroy());
                         viewContainerRefs.forEach((ref, i) => {
                             const listItem = this.listItems?.[i];
                             if (listItem) {
                                 this.listFormArray.push(listItem.control);
                                 listItem.componentRef = this.renderInputComponent(
-                                    factory,
+                                    injector,
                                     ref,
                                     listItem.control,
                                 );
@@ -146,8 +156,9 @@ export class DynamicFormInputComponent
                             .subscribe(val => {
                                 this.control.markAsTouched();
                                 this.control.markAsDirty();
-                                this.onChange(val);
-                                this.control.patchValue(val, { emitEvent: false });
+                                const truthyValues = val.filter(notNullOrUndefined);
+                                this.onChange(truthyValues);
+                                this.control.patchValue(truthyValues, { emitEvent: false });
                             });
                         setTimeout(() => this.changeDetectorRef.markForCheck());
                     }
@@ -176,6 +187,12 @@ export class DynamicFormInputComponent
         if (this.listItems) {
             for (const item of this.listItems) {
                 if (item.componentRef) {
+                    const { value } = item.control;
+                    const { type } = item.componentRef.instance.config || {};
+                    // fix a bug where the list item of string turns into number which lead to unexpected behavior
+                    if (typeof value === 'number' && type === 'string') {
+                        item.control.setValue(item.control.value.toString(), { emitEvent: false });
+                    }
                     this.updateBindings(changes, item.componentRef);
                 }
             }
@@ -210,7 +227,7 @@ export class DynamicFormInputComponent
         }
         this.listItems.push({
             id: this.listId++,
-            control: new FormControl((this.def as ConfigArgDefinition).defaultValue ?? null),
+            control: new UntypedFormControl((this.def as ConfigArgDefinition).defaultValue ?? null),
         });
         this.renderList$.next();
     }
@@ -235,11 +252,11 @@ export class DynamicFormInputComponent
     }
 
     private renderInputComponent(
-        factory: ComponentFactory<FormInputComponent>,
+        injector: Injector,
         viewContainerRef: ViewContainerRef,
-        formControl: FormControl,
+        formControl: UntypedFormControl,
     ) {
-        const componentRef = viewContainerRef.createComponent(factory);
+        const componentRef = viewContainerRef.createComponent(this.componentType, { injector });
         const { instance } = componentRef;
         instance.config = simpleDeepClone(this.def);
         instance.formControl = formControl;
@@ -268,8 +285,8 @@ export class DynamicFormInputComponent
                     value =>
                         ({
                             id: this.listId++,
-                            control: new FormControl(getConfigArgValue(value)),
-                        } as InputListItem),
+                            control: new UntypedFormControl(getConfigArgValue(value)),
+                        }) as InputListItem,
                 );
                 this.renderList$.next();
             }
@@ -299,7 +316,8 @@ export class DynamicFormInputComponent
                     return { component: 'text-form-input' };
                 }
             }
-            case 'text': {
+            case 'text':
+            case 'localeText': {
                 return { component: 'textarea-form-input' };
             }
             case 'int':
@@ -313,6 +331,8 @@ export class DynamicFormInputComponent
                 return { component: 'text-form-input' };
             case 'relation':
                 return { component: 'relation-form-input' };
+            case 'struct':
+                return { component: 'struct-form-input' };
             default:
                 assertNever(type);
         }

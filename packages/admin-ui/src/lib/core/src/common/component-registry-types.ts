@@ -1,4 +1,5 @@
 import { FormControl } from '@angular/forms';
+import { DataTableLocationId } from '../shared/components/data-table-2/data-table-custom-component.service';
 
 /**
  * @description
@@ -44,11 +45,11 @@ export type InputComponentConfig = {
 
 /**
  * @description
- * The valid locationIds for registering action bar items.
+ * The valid locationIds for registering action bar items or tabs.
  *
  * @docsCategory action-bar
  */
-export type ActionBarLocationId =
+export type PageLocationId =
     | 'administrator-detail'
     | 'administrator-list'
     | 'asset-detail'
@@ -62,6 +63,8 @@ export type ActionBarLocationId =
     | 'customer-detail'
     | 'customer-list'
     | 'customer-group-list'
+    | 'customer-group-detail'
+    | 'draft-order-detail'
     | 'facet-detail'
     | 'facet-list'
     | 'global-setting-detail'
@@ -69,21 +72,38 @@ export type ActionBarLocationId =
     | 'job-list'
     | 'order-detail'
     | 'order-list'
+    | 'modify-order'
     | 'payment-method-detail'
     | 'payment-method-list'
     | 'product-detail'
     | 'product-list'
+    | 'product-variant-detail'
+    | 'profile'
     | 'promotion-detail'
     | 'promotion-list'
     | 'role-detail'
     | 'role-list'
+    | 'seller-detail'
+    | 'seller-list'
     | 'shipping-method-detail'
     | 'shipping-method-list'
+    | 'stock-location-detail'
+    | 'stock-location-list'
     | 'tax-category-detail'
     | 'tax-category-list'
     | 'tax-rate-detail'
     | 'tax-rate-list'
+    | 'zone-detail'
     | 'zone-list';
+
+/**
+ * @description
+ * The valid locationIds for registering action bar items. For a list of
+ * values, see {@link PageLocationId}.
+ *
+ * @docsCategory action-bar
+ */
+export type ActionBarLocationId = PageLocationId;
 
 /**
  * @description
@@ -92,19 +112,29 @@ export type ActionBarLocationId =
  * @docsCategory custom-detail-components
  */
 export type CustomDetailComponentLocationId =
+    | 'administrator-profile'
     | 'administrator-detail'
     | 'channel-detail'
     | 'collection-detail'
     | 'country-detail'
     | 'customer-detail'
+    | 'customer-group-detail'
+    | 'draft-order-detail'
     | 'facet-detail'
     | 'global-settings-detail'
     | 'order-detail'
     | 'payment-method-detail'
     | 'product-detail'
+    | 'product-variant-detail'
     | 'promotion-detail'
+    | 'seller-detail'
     | 'shipping-method-detail'
+    | 'stock-location-detail'
     | 'tax-category-detail'
-    | 'tax-rate-detail';
+    | 'tax-rate-detail'
+    | 'zone-detail';
 
-export type UIExtensionLocationId = ActionBarLocationId | CustomDetailComponentLocationId;
+export type UIExtensionLocationId =
+    | ActionBarLocationId
+    | CustomDetailComponentLocationId
+    | DataTableLocationId;

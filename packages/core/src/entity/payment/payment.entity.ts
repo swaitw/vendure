@@ -1,9 +1,12 @@
 import { DeepPartial } from '@vendure/common/lib/shared-types';
-import { Column, Entity, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, Index, ManyToOne, OneToMany } from 'typeorm';
 
 import { PaymentMetadata } from '../../common/types/common-types';
+import { HasCustomFields } from '../../config/index';
 import { PaymentState } from '../../service/helpers/payment-state-machine/payment-state';
 import { VendureEntity } from '../base/base.entity';
+import { CustomPaymentFields } from '../custom-entity-fields';
+import { Money } from '../money.decorator';
 import { Order } from '../order/order.entity';
 import { Refund } from '../refund/refund.entity';
 
@@ -15,14 +18,14 @@ import { Refund } from '../refund/refund.entity';
  * @docsCategory entities
  */
 @Entity()
-export class Payment extends VendureEntity {
+export class Payment extends VendureEntity implements HasCustomFields {
     constructor(input?: DeepPartial<Payment>) {
         super(input);
     }
 
     @Column() method: string;
 
-    @Column() amount: number;
+    @Money() amount: number;
 
     @Column('varchar') state: PaymentState;
 
@@ -34,9 +37,13 @@ export class Payment extends VendureEntity {
 
     @Column('simple-json') metadata: PaymentMetadata;
 
+    @Index()
     @ManyToOne(type => Order, order => order.payments)
     order: Order;
 
     @OneToMany(type => Refund, refund => refund.payment)
     refunds: Refund[];
+
+    @Column(type => CustomPaymentFields)
+    customFields: CustomPaymentFields;
 }

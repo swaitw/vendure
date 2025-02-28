@@ -1,37 +1,41 @@
 import { RequestContext } from '../../../api/common/request-context';
-import { Transitions } from '../../../common/finite-state-machine/types';
 import { Fulfillment } from '../../../entity/fulfillment/fulfillment.entity';
 import { Order } from '../../../entity/order/order.entity';
 
 /**
  * @description
- * These are the default states of the fulfillment process.
+ * An interface to extend standard {@link FulfillmentState}.
  *
- * @docsCategory fulfillment
+ * @deprecated use FulfillmentStates
  */
-export type FulfillmentState = 'Created' | 'Pending' | 'Shipped' | 'Delivered' | 'Cancelled';
-
-export const fulfillmentStateTransitions: Transitions<FulfillmentState> = {
-    Created: {
-        to: ['Pending'],
-    },
-    Pending: {
-        to: ['Shipped', 'Delivered', 'Cancelled'],
-    },
-    Shipped: {
-        to: ['Delivered', 'Cancelled'],
-    },
-    Delivered: {
-        to: ['Cancelled'],
-    },
-    Cancelled: {
-        to: [],
-    },
-};
+export interface CustomFulfillmentStates {}
 
 /**
  * @description
- * The data which is passed to the state transition handlers of the FulfillmentStateMachine.
+ * An interface to extend standard {@link FulfillmentState}.
+ *
+ * @docsCategory fulfillment
+ */
+export interface FulfillmentStates {}
+
+/**
+ * @description
+ * These are the default states of the fulfillment process. By default, they will be extended
+ * by the {@link defaultFulfillmentProcess} to also include `Shipped` and `Delivered`.
+ *
+ *
+ * @docsCategory fulfillment
+ */
+export type FulfillmentState =
+    | 'Created'
+    | 'Pending'
+    | 'Cancelled'
+    | keyof CustomFulfillmentStates
+    | keyof FulfillmentStates;
+
+/**
+ * @description
+ * The data which is passed to the state transition handler of the FulfillmentStateMachine.
  *
  * @docsCategory fulfillment
  */

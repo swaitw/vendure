@@ -10,7 +10,7 @@ export const productsPercentageDiscount = new PromotionItemAction({
     description: [{ languageCode: LanguageCode.en, value: 'Discount specified products by { discount }%' }],
     args: {
         discount: {
-            type: 'int',
+            type: 'float',
             ui: {
                 component: 'number-form-input',
                 suffix: '%',
@@ -23,8 +23,7 @@ export const productsPercentageDiscount = new PromotionItemAction({
             label: [{ languageCode: LanguageCode.en, value: 'Product variants' }],
         },
     },
-
-    execute(ctx, orderItem, orderLine, args) {
+    execute(ctx, orderLine, args) {
         if (lineContainsIds(args.productVariantIds, orderLine)) {
             const unitPrice = ctx.channel.pricesIncludeTax ? orderLine.unitPriceWithTax : orderLine.unitPrice;
             return -unitPrice * (args.discount / 100);

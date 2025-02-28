@@ -2,20 +2,34 @@ import { ChangeDetectionStrategy, Component, OnInit } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import {
+    CUSTOMER_GROUP_FRAGMENT,
     DataService,
-    DeletionResult,
-    GetCustomerGroups,
-    GetCustomerGroupWithCustomers,
-    GetZones,
+    GetCustomerGroupListDocument,
+    GetCustomerGroupsQuery,
+    GetCustomerGroupWithCustomersQuery,
+    ItemOf,
     ModalService,
     NotificationService,
+    TypedBaseListComponent,
 } from '@vendure/admin-ui/core';
+import { gql } from 'apollo-angular';
 import { BehaviorSubject, combineLatest, EMPTY, Observable, of } from 'rxjs';
-import { distinctUntilChanged, map, mapTo, switchMap, tap } from 'rxjs/operators';
+import { distinctUntilChanged, map, mapTo, switchMap } from 'rxjs/operators';
 
 import { AddCustomerToGroupDialogComponent } from '../add-customer-to-group-dialog/add-customer-to-group-dialog.component';
-import { CustomerGroupDetailDialogComponent } from '../customer-group-detail-dialog/customer-group-detail-dialog.component';
 import { CustomerGroupMemberFetchParams } from '../customer-group-member-list/customer-group-member-list.component';
+
+export const GET_CUSTOMER_GROUP_LIST = gql`
+    query GetCustomerGroupList($options: CustomerGroupListOptions) {
+        customerGroups(options: $options) {
+            items {
+                ...CustomerGroup
+            }
+            totalItems
+        }
+    }
+    ${CUSTOMER_GROUP_FRAGMENT}
+`;
 
 @Component({
     selector: 'vdr-customer-group-list',
@@ -23,42 +37,89 @@ import { CustomerGroupMemberFetchParams } from '../customer-group-member-list/cu
     styleUrls: ['./customer-group-list.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class CustomerGroupListComponent implements OnInit {
-    activeGroup$: Observable<GetCustomerGroups.Items | undefined>;
-    groups$: Observable<GetCustomerGroups.Items[]>;
+export class CustomerGroupListComponent
+    extends TypedBaseListComponent<typeof GetCustomerGroupListDocument, 'customerGroups'>
+    implements OnInit
+{
+    dataTableListId = 'customer-group-list';
+    readonly customFields = this.getCustomFieldConfig('CustomerGroup');
+    activeGroup$: Observable<ItemOf<GetCustomerGroupsQuery, 'customerGroups'> | undefined>;
+    activeIndex$: Observable<number>;
     listIsEmpty$: Observable<boolean>;
-    members$: Observable<GetCustomerGroupWithCustomers.Items[]>;
+    members$: Observable<
+        NonNullable<GetCustomerGroupWithCustomersQuery['customerGroup']>['customers']['items']
+    >;
     membersTotal$: Observable<number>;
-    selectedCustomerIds: string[] = [];
     fetchGroupMembers$ = new BehaviorSubject<CustomerGroupMemberFetchParams>({
         skip: 0,
         take: 0,
         filterTerm: '',
     });
+    readonly filters = this.createFilterCollection()
+        .addIdFilter()
+        .addDateFilters()
+        .addFilter({
+            name: 'name',
+            type: { kind: 'text' },
+            label: _('common.name'),
+            filterField: 'name',
+        })
+        .connectToRoute(this.route);
+
+    readonly sorts = this.createSortCollection()
+        .defaultSort('createdAt', 'DESC')
+        .addSort({ name: 'createdAt' })
+        .addSort({ name: 'updatedAt' })
+        .addSort({ name: 'name' })
+        .connectToRoute(this.route);
     private refreshActiveGroupMembers$ = new BehaviorSubject<void>(undefined);
 
     constructor(
-        private dataService: DataService,
+        protected dataService: DataService,
         private notificationService: NotificationService,
         private modalService: ModalService,
         public route: ActivatedRoute,
-        private router: Router,
-    ) {}
+        protected router: Router,
+    ) {
+        super();
+        super.configure({
+            document: GetCustomerGroupListDocument,
+            getItems: data => data.customerGroups,
+            setVariables: (skip, take) => ({
+                options: {
+                    skip,
+                    take,
+                    filter: {
+                        name: { contains: this.searchTermControl.value },
+                        ...this.filters.createFilterInput(),
+                    },
+                    sort: this.sorts.createSortInput(),
+                },
+            }),
+            refreshListOnChanges: [this.filters.valueChanges, this.sorts.valueChanges],
+        });
+    }
 
     ngOnInit(): void {
-        this.groups$ = this.dataService.customer
-            .getCustomerGroupList()
-            .mapStream(data => data.customerGroups.items);
+        super.ngOnInit();
         const activeGroupId$ = this.route.paramMap.pipe(
             map(pm => pm.get('contents')),
             distinctUntilChanged(),
-            tap(() => (this.selectedCustomerIds = [])),
         );
-        this.listIsEmpty$ = this.groups$.pipe(map(groups => groups.length === 0));
-        this.activeGroup$ = combineLatest(this.groups$, activeGroupId$).pipe(
+        this.listIsEmpty$ = this.items$.pipe(map(groups => groups.length === 0));
+        this.activeGroup$ = combineLatest(this.items$, activeGroupId$).pipe(
             map(([groups, activeGroupId]) => {
                 if (activeGroupId) {
                     return groups.find(g => g.id === activeGroupId);
+                }
+            }),
+        );
+        this.activeIndex$ = combineLatest(this.items$, activeGroupId$).pipe(
+            map(([groups, activeGroupId]) => {
+                if (activeGroupId) {
+                    return groups.findIndex(g => g.id === activeGroupId);
+                } else {
+                    return -1;
                 }
             }),
         );
@@ -90,106 +151,13 @@ export class CustomerGroupListComponent implements OnInit {
         this.membersTotal$ = membersResult$.pipe(map(res => res?.totalItems ?? 0));
     }
 
-    create() {
-        this.modalService
-            .fromComponent(CustomerGroupDetailDialogComponent, { locals: { group: { name: '' } } })
-            .pipe(
-                switchMap(result =>
-                    result
-                        ? this.dataService.customer.createCustomerGroup({ ...result, customerIds: [] })
-                        : EMPTY,
-                ),
-                // refresh list
-                switchMap(() => this.dataService.customer.getCustomerGroupList().single$),
-            )
-            .subscribe(
-                () => {
-                    this.notificationService.success(_('common.notify-create-success'), {
-                        entity: 'CustomerGroup',
-                    });
-                },
-                err => {
-                    this.notificationService.error(_('common.notify-create-error'), {
-                        entity: 'CustomerGroup',
-                    });
-                },
-            );
-    }
-
-    delete(groupId: string) {
-        this.modalService
-            .dialog({
-                title: _('customer.confirm-delete-customer-group'),
-                buttons: [
-                    { type: 'secondary', label: _('common.cancel') },
-                    { type: 'danger', label: _('common.delete'), returnValue: true },
-                ],
-            })
-            .pipe(
-                switchMap(response =>
-                    response ? this.dataService.customer.deleteCustomerGroup(groupId) : EMPTY,
-                ),
-
-                switchMap(result => {
-                    if (result.deleteCustomerGroup.result === DeletionResult.DELETED) {
-                        // refresh list
-                        return this.dataService.customer
-                            .getCustomerGroupList()
-                            .mapSingle(() => ({ errorMessage: false }));
-                    } else {
-                        return of({ errorMessage: result.deleteCustomerGroup.message });
-                    }
-                }),
-            )
-            .subscribe(
-                result => {
-                    if (typeof result.errorMessage === 'string') {
-                        this.notificationService.error(result.errorMessage);
-                    } else {
-                        this.notificationService.success(_('common.notify-delete-success'), {
-                            entity: 'CustomerGroup',
-                        });
-                    }
-                },
-                err => {
-                    this.notificationService.error(_('common.notify-delete-error'), {
-                        entity: 'CustomerGroup',
-                    });
-                },
-            );
-    }
-
-    update(group: GetCustomerGroups.Items) {
-        this.modalService
-            .fromComponent(CustomerGroupDetailDialogComponent, { locals: { group } })
-            .pipe(
-                switchMap(result =>
-                    result
-                        ? this.dataService.customer.updateCustomerGroup({ id: group.id, ...result })
-                        : EMPTY,
-                ),
-            )
-            .subscribe(
-                () => {
-                    this.notificationService.success(_('common.notify-update-success'), {
-                        entity: 'CustomerGroup',
-                    });
-                },
-                err => {
-                    this.notificationService.error(_('common.notify-update-error'), {
-                        entity: 'CustomerGroup',
-                    });
-                },
-            );
-    }
-
     closeMembers() {
         const params = { ...this.route.snapshot.params };
         delete params.contents;
         this.router.navigate(['./', params], { relativeTo: this.route, queryParamsHandling: 'preserve' });
     }
 
-    addToGroup(group: GetCustomerGroupWithCustomers.CustomerGroup) {
+    addToGroup(group: NonNullable<GetCustomerGroupWithCustomersQuery['customerGroup']>) {
         this.modalService
             .fromComponent(AddCustomerToGroupDialogComponent, {
                 locals: {
@@ -215,21 +183,7 @@ export class CustomerGroupListComponent implements OnInit {
                         groupName: group.name,
                     });
                     this.refreshActiveGroupMembers$.next();
-                    this.selectedCustomerIds = [];
                 },
             });
-    }
-
-    removeFromGroup(group: GetZones.Zones, customerIds: string[]) {
-        this.dataService.customer.removeCustomersFromGroup(group.id, customerIds).subscribe({
-            complete: () => {
-                this.notificationService.success(_(`customer.remove-customers-from-group-success`), {
-                    customerCount: customerIds.length,
-                    groupName: group.name,
-                });
-                this.refreshActiveGroupMembers$.next();
-                this.selectedCustomerIds = [];
-            },
-        });
     }
 }

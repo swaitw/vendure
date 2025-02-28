@@ -1,15 +1,16 @@
 import { INestApplicationContext } from '@nestjs/common';
 import fs from 'fs-extra';
 import path from 'path';
+import { lastValueFrom } from 'rxjs';
 
 const loggerCtx = 'Populate';
 
-// tslint:disable:no-console
+/* eslint-disable no-console */
 /**
  * @description
  * Populates the Vendure server with some initial data and (optionally) product data from
  * a supplied CSV file. The format of the CSV file is described in the section
- * [Importing Product Data](/docs/developer-guide/importing-product-data).
+ * [Importing Product Data](/guides/developer-guide/importing-data/).
  *
  * If the `channelOrToken` argument is provided, all ChannelAware entities (Products, ProductVariants,
  * Assets, ShippingMethods, PaymentMethods etc.) will be assigned to the specified Channel.
@@ -19,10 +20,10 @@ const loggerCtx = 'Populate';
  *
  * 1. Uses the {@link Populator} to populate the {@link InitialData}.
  * 2. If `productsCsvPath` is provided, uses {@link Importer} to populate Product data.
- * 3. Uses {@Populator} to populate collections specified in the {@link InitialData}.
+ * 3. Uses {@link Populator} to populate collections specified in the {@link InitialData}.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { bootstrap } from '\@vendure/core';
  * import { populate } from '\@vendure/core/cli';
  * import { config } from './vendure-config.ts'
@@ -111,8 +112,8 @@ export async function populateInitialData(
     const populator = app.get(Populator);
     try {
         await populator.populateInitialData(initialData, channel);
-        Logger.info(`Populated initial data`, loggerCtx);
-    } catch (err) {
+        Logger.info('Populated initial data', loggerCtx);
+    } catch (err: any) {
         Logger.error(err.message, loggerCtx);
     }
 }
@@ -129,7 +130,7 @@ export async function populateCollections(
             await populator.populateCollections(initialData, channel);
             Logger.info(`Created ${initialData.collections.length} Collections`, loggerCtx);
         }
-    } catch (err) {
+    } catch (err: any) {
         Logger.info(err.message, loggerCtx);
     }
 }
@@ -149,5 +150,9 @@ export async function importProductsFromCsv(
         languageCode,
         channelOrToken: channel,
     });
-    return importer.parseAndImport(productData, ctx, true).toPromise();
+    const createEnvVar: import('@vendure/common/lib/shared-constants').CREATING_VENDURE_APP =
+        'CREATING_VENDURE_APP';
+    // Turn off progress bar when running in the context of the @vendure/create script
+    const reportProgress = process.env[createEnvVar] === 'true' ? false : true;
+    return lastValueFrom(importer.parseAndImport(productData, ctx, reportProgress));
 }

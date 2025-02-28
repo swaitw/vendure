@@ -1,12 +1,12 @@
-import { DeepPartial, ID } from '@vendure/common/lib/shared-types';
+import { ID } from '@vendure/common/lib/shared-types';
 import { Column, Entity, Index, ManyToOne, TableInheritance } from 'typeorm';
 
+import { HasCustomFields } from '../../config/custom-field/custom-field-types';
 import { VendureEntity } from '../base/base.entity';
 import { Channel } from '../channel/channel.entity';
-import { Customer } from '../customer/customer.entity';
+import { CustomSessionFields } from '../custom-entity-fields';
 import { EntityId } from '../entity-id.decorator';
 import { Order } from '../order/order.entity';
-import { User } from '../user/user.entity';
 
 /**
  * @description
@@ -17,7 +17,7 @@ import { User } from '../user/user.entity';
  */
 @Entity()
 @TableInheritance({ column: { type: 'varchar', name: 'type' } })
-export abstract class Session extends VendureEntity {
+export abstract class Session extends VendureEntity implements HasCustomFields {
     @Index({ unique: true })
     @Column()
     token: string;
@@ -29,12 +29,17 @@ export abstract class Session extends VendureEntity {
     @EntityId({ nullable: true })
     activeOrderId?: ID;
 
+    @Index()
     @ManyToOne(type => Order)
     activeOrder: Order | null;
 
     @EntityId({ nullable: true })
     activeChannelId?: ID;
 
+    @Index()
     @ManyToOne(type => Channel)
     activeChannel: Channel | null;
+
+    @Column(type => CustomSessionFields)
+    customFields: CustomSessionFields;
 }

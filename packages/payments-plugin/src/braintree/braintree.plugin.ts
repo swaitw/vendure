@@ -1,5 +1,5 @@
 import { LanguageCode, PluginCommonModule, Type, VendurePlugin } from '@vendure/core';
-import { gql } from 'apollo-server-core';
+import { gql } from 'graphql-tag';
 
 import { braintreePaymentMethodHandler } from './braintree.handler';
 import { BraintreeResolver } from './braintree.resolver';
@@ -27,7 +27,7 @@ import { BraintreePluginOptions } from './types';
  * ## Setup
  *
  * 1. Add the plugin to your VendureConfig `plugins` array:
- *     ```TypeScript
+ *     ```ts
  *     import { BraintreePlugin } from '\@vendure/payments-plugin/package/braintree';
  *     import { Environment } from 'braintree';
  *
@@ -37,7 +37,8 @@ import { BraintreePluginOptions } from './types';
  *       BraintreePlugin.init({
  *         environment: Environment.Sandbox,
  *         // This allows saving customer payment
- *         // methods with Braintree
+ *         // methods with Braintree (see "vaulting"
+ *         // section below for details)
  *         storeCustomersInBraintree: true,
  *       }),
  *     ]
@@ -67,7 +68,7 @@ import { BraintreePluginOptions } from './types';
  * Here is an example of how your storefront code will look. Note that this example is attempting to
  * be framework-agnostic, so you'll need to adapt it to fit to your framework of choice.
  *
- * ```TypeScript
+ * ```ts
  * // The Braintree Dropin instance
  * let dropin: import('braintree-web-drop-in').Dropin;
  *
@@ -100,7 +101,7 @@ import { BraintreePluginOptions } from './types';
  *       // Braintree account.
  *       paypal: {
  *         flow: 'checkout',
- *         amount: order.totalWithTax,
+ *         amount: order.totalWithTax / 100,
  *         currency: 'GBP',
  *       },
  *     }),
@@ -187,7 +188,54 @@ import { BraintreePluginOptions } from './types';
  *   }
  * }
  * ```
- * @docsCategory payments-plugin
+ *
+ * ## Storing payment details (vaulting)
+ *
+ * Braintree has a [vault feature](https://developer.paypal.com/braintree/articles/control-panel/vault/overview) which allows the secure storage
+ * of customer's payment information. Using the vault allows you to offer a faster checkout for repeat customers without needing to worry about
+ * how to securely store payment details.
+ *
+ * To enable this feature, set the `storeCustomersInBraintree` option to `true`.
+ *
+ * ```ts
+ * BraintreePlugin.init({
+ *   environment: Environment.Sandbox,
+ *   storeCustomersInBraintree: true,
+ * }),
+ * ```
+ *
+ * Since v1.8, it is possible to override vaulting on a per-payment basis by passing `includeCustomerId: false` to the `generateBraintreeClientToken`
+ * mutation:
+ *
+ * ```GraphQL
+ * const { generateBraintreeClientToken } = await graphQlClient.query(gql`
+ *   query GenerateBraintreeClientToken($includeCustomerId: Boolean) {
+ *     generateBraintreeClientToken(includeCustomerId: $includeCustomerId)
+ *   }
+ * `, { includeCustomerId: false });
+ * ```
+ *
+ * as well as in the metadata of the `addPaymentToOrder` mutation:
+ *
+ * ```ts
+ * const { addPaymentToOrder } = await graphQlClient.query(gql`
+ *   mutation AddPayment($input: PaymentInput!) {
+ *     addPaymentToOrder(input: $input) {
+ *       ...Order
+ *       ...ErrorResult
+ *     }
+ *   }`, {
+ *     input: {
+ *       method: 'braintree',
+ *       metadata: {
+ *         ...paymentResult,
+ *         includeCustomerId: false,
+ *       },
+ *     }
+ *   );
+ * ```
+ *
+ * @docsCategory core plugins/PaymentsPlugin
  * @docsPage BraintreePlugin
  */
 @VendurePlugin({
@@ -215,11 +263,12 @@ import { BraintreePluginOptions } from './types';
     shopApiExtensions: {
         schema: gql`
             extend type Query {
-                generateBraintreeClientToken(orderId: ID): String!
+                generateBraintreeClientToken(orderId: ID, includeCustomerId: Boolean): String!
             }
         `,
         resolvers: [BraintreeResolver],
     },
+    compatibility: '^3.0.0',
 })
 export class BraintreePlugin {
     static options: BraintreePluginOptions = {};

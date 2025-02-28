@@ -86,7 +86,7 @@ export type SortOrder = 'ASC' | 'DESC';
 
 // prettier-ignore
 export type PrimitiveFields<T extends VendureEntity> = {
-    [K in keyof T]: T[K] extends LocaleString | number | string | boolean | Date ? K : never
+    [K in keyof T]: NonNullable<T[K]> extends LocaleString | number | string | boolean | Date ? K : never
 }[keyof T];
 
 // prettier-ignore
@@ -105,6 +105,9 @@ export type FilterParameter<T extends VendureEntity> = {
         : T[K] extends number ? NumberOperators
             : T[K] extends boolean ? BooleanOperators
                 : T[K] extends Date ? DateOperators : StringOperators;
+} & {
+    _and?: Array<FilterParameter<T>>;
+    _or?: Array<FilterParameter<T>>;
 };
 
 export interface StringOperators {
@@ -115,10 +118,12 @@ export interface StringOperators {
     in?: string[];
     notIn?: string[];
     regex?: string;
+    isNull?: boolean;
 }
 
 export interface BooleanOperators {
     eq?: boolean;
+    isNull?: boolean;
 }
 
 export interface NumberRange {
@@ -133,6 +138,7 @@ export interface NumberOperators {
     gt?: number;
     gte?: number;
     between?: NumberRange;
+    isNull?: boolean;
 }
 
 export interface DateRange {
@@ -145,6 +151,7 @@ export interface DateOperators {
     before?: Date;
     after?: Date;
     between?: DateRange;
+    isNull?: boolean;
 }
 
 export interface ListOperators {
@@ -169,13 +176,36 @@ export type PriceCalculationResult = {
     priceIncludesTax: boolean;
 };
 
-// tslint:disable-next-line:ban-types
+// eslint-disable-next-line @typescript-eslint/ban-types
 export type MiddlewareHandler = Type<any> | Function;
 
 /**
  * @description
  * Defines API middleware, set in the {@link ApiOptions}. Middleware can be either
  * [Express middleware](https://expressjs.com/en/guide/using-middleware.html) or [NestJS middleware](https://docs.nestjs.com/middleware).
+ *
+ * ## Increasing the maximum request body size limit
+ *
+ * Internally, Vendure relies on the body-parser middleware to parse incoming JSON data. By default, the maximum
+ * body size is set to 100kb. Attempting to send a request with more than 100kb of JSON data will result in a
+ * `PayloadTooLargeError`. To increase this limit, we can manually configure the body-parser middleware:
+ *
+ * @example
+ * ```ts
+ * import { VendureConfig } from '\@vendure/core';
+ * import { json } from 'body-parser';
+ *
+ * export const config: VendureConfig = {
+ *   // ...
+ *   apiOptions: {
+ *     middleware: [{
+ *       handler: json({ limit: '10mb' }),
+ *       route: '*',
+ *       beforeListen: true,
+ *     }],
+ *   },
+ * };
+ * ```
  *
  * @docsCategory Common
  */

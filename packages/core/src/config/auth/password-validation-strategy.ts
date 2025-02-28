@@ -1,10 +1,17 @@
-import { RequestContext } from '../../api/index';
+import { RequestContext } from '../../api/common/request-context';
 import { InjectableStrategy } from '../../common/types/injectable-strategy';
 
 /**
  * @description
  * Defines validation to apply to new password (when creating an account or updating an existing account's
  * password when using the {@link NativeAuthenticationStrategy}.
+ *
+ * :::info
+ *
+ * This is configured via the `authOptions.passwordValidationStrategy` property of
+ * your VendureConfig.
+ *
+ * :::
  *
  * @docsCategory auth
  * @since 1.5.0

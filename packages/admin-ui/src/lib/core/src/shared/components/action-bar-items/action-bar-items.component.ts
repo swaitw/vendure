@@ -1,22 +1,9 @@
-import {
-    ChangeDetectionStrategy,
-    Component,
-    HostBinding,
-    Input,
-    OnChanges,
-    OnInit,
-    SimpleChanges,
-} from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ChangeDetectionStrategy, Component, OnChanges, OnInit } from '@angular/core';
 import { assertNever } from '@vendure/common/lib/shared-utils';
-import { BehaviorSubject, combineLatest, Observable, of } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
-
-import { ActionBarLocationId } from '../../../common/component-registry-types';
-import { DataService } from '../../../data/providers/data.service';
+import { combineLatest } from 'rxjs';
+import { map, tap } from 'rxjs/operators';
 import { ActionBarItem } from '../../../providers/nav-builder/nav-builder-types';
-import { NavBuilderService } from '../../../providers/nav-builder/nav-builder.service';
-import { NotificationService } from '../../../providers/notification/notification.service';
+import { ActionBarBaseComponent } from './action-bar-base.component';
 
 @Component({
     selector: 'vdr-action-bar-items',
@@ -24,49 +11,18 @@ import { NotificationService } from '../../../providers/notification/notificatio
     styleUrls: ['./action-bar-items.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ActionBarItemsComponent implements OnInit, OnChanges {
-    @HostBinding('attr.data-location-id')
-    @Input()
-    locationId: ActionBarLocationId;
-
-    items$: Observable<ActionBarItem[]>;
-    private locationId$ = new BehaviorSubject<string>('');
-
-    constructor(
-        private navBuilderService: NavBuilderService,
-        private route: ActivatedRoute,
-        private dataService: DataService,
-        private notificationService: NotificationService,
-    ) {}
-
+export class ActionBarItemsComponent extends ActionBarBaseComponent<ActionBarItem> implements OnInit {
     ngOnInit() {
-        this.items$ = combineLatest(this.navBuilderService.actionBarConfig$, this.locationId$).pipe(
+        this.items$ = combineLatest([this.navBuilderService.actionBarConfig$, this.locationId$]).pipe(
             map(([items, locationId]) => items.filter(config => config.locationId === locationId)),
+            tap(items => {
+                this.buildButtonStates(items);
+            }),
         );
     }
 
-    ngOnChanges(changes: SimpleChanges): void {
-        if ('locationId' in changes) {
-            this.locationId$.next(changes['locationId'].currentValue);
-        }
-    }
-
-    handleClick(event: MouseEvent, item: ActionBarItem) {
-        if (typeof item.onClick === 'function') {
-            item.onClick(event, {
-                route: this.route,
-                dataService: this.dataService,
-                notificationService: this.notificationService,
-            });
-        }
-    }
-
-    getRouterLink(item: ActionBarItem): any[] | null {
-        return this.navBuilderService.getRouterLink(item, this.route);
-    }
-
     getButtonStyles(item: ActionBarItem): string[] {
-        const styles = ['btn'];
+        const styles = ['button'];
         if (item.buttonStyle && item.buttonStyle === 'link') {
             styles.push('btn-link');
             return styles;
@@ -78,12 +34,13 @@ export class ActionBarItemsComponent implements OnInit, OnChanges {
     private getButtonColorClass(item: ActionBarItem): string {
         switch (item.buttonColor) {
             case undefined:
+                return '';
             case 'primary':
-                return item.buttonStyle === 'outline' ? 'btn-outline' : 'btn-primary';
+                return item.buttonStyle === 'outline' ? 'btn-outline' : 'primary';
             case 'success':
-                return item.buttonStyle === 'outline' ? 'btn-success-outline' : 'btn-success';
+                return item.buttonStyle === 'outline' ? 'btn-success-outline' : 'success';
             case 'warning':
-                return item.buttonStyle === 'outline' ? 'btn-warning-outline' : 'btn-warning';
+                return item.buttonStyle === 'outline' ? 'btn-warning-outline' : 'warning';
             default:
                 assertNever(item.buttonColor);
                 return '';

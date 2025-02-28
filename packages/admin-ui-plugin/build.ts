@@ -1,4 +1,4 @@
-/* tslint:disable:no-console */
+/* eslint-disable no-console */
 import { execSync, spawn } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';
@@ -9,7 +9,7 @@ console.log('Building admin-ui from source...');
 fs.removeSync(compiledUiDir);
 
 const adminUiDir = path.join(__dirname, '../admin-ui');
-const buildProcess = spawn('yarn', [`--cwd "${adminUiDir}"`, 'run', 'build:app'], {
+const buildProcess = spawn('npm', ['run', 'build:app', `--prefix "${adminUiDir}"`], {
     cwd: adminUiDir,
     shell: true,
     stdio: 'inherit',

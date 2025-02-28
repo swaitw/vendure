@@ -9,7 +9,14 @@ import { ProductVariant } from '../../entity/product-variant/product-variant.ent
  * sensitive information. However, the storefront will usually want to display _some_ indication
  * of whether a given ProductVariant is in stock.
  *
- * @docsCategory configuration
+ * :::info
+ *
+ * This is configured via the `catalogOptions.stockDisplayStrategy` property of
+ * your VendureConfig.
+ *
+ * :::
+ *
+ * @docsCategory products & stock
  */
 export interface StockDisplayStrategy extends InjectableStrategy {
     /**

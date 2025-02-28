@@ -1,30 +1,30 @@
-import { DocumentNode, FieldNode, FragmentDefinitionNode } from 'graphql';
+import { DocumentNode, FieldNode, FragmentDefinitionNode, Kind, OperationTypeNode } from 'graphql';
 
 import { CustomFieldConfig, CustomFields } from '../../common/generated-types';
 
 import { addCustomFields } from './add-custom-fields';
 
-// tslint:disable:no-non-null-assertion
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 describe('addCustomFields()', () => {
     let documentNode: DocumentNode;
 
     function generateFragmentDefinitionFor(type: keyof CustomFields): FragmentDefinitionNode {
         return {
-            kind: 'FragmentDefinition',
+            kind: Kind.FRAGMENT_DEFINITION,
             name: {
-                kind: 'Name',
+                kind: Kind.NAME,
                 value: type,
             },
             typeCondition: {
-                kind: 'NamedType',
+                kind: Kind.NAMED_TYPE,
                 name: {
-                    kind: 'Name',
+                    kind: Kind.NAME,
                     value: type,
                 },
             },
             directives: [],
             selectionSet: {
-                kind: 'SelectionSet',
+                kind: Kind.SELECTION_SET,
                 selections: [],
             },
         };
@@ -32,35 +32,35 @@ describe('addCustomFields()', () => {
 
     beforeEach(() => {
         documentNode = {
-            kind: 'Document',
+            kind: Kind.DOCUMENT,
             definitions: [
                 {
-                    kind: 'OperationDefinition',
-                    operation: 'query',
+                    kind: Kind.OPERATION_DEFINITION,
+                    operation: OperationTypeNode.QUERY,
                     name: {
-                        kind: 'Name',
+                        kind: Kind.NAME,
                         value: 'GetProductWithVariants',
                     },
                     variableDefinitions: [],
                     directives: [],
                     selectionSet: {
-                        kind: 'SelectionSet',
+                        kind: Kind.SELECTION_SET,
                         selections: [
                             {
-                                kind: 'Field',
+                                kind: Kind.FIELD,
                                 name: {
-                                    kind: 'Name',
+                                    kind: Kind.NAME,
                                     value: 'product',
                                 },
                                 arguments: [],
                                 directives: [],
                                 selectionSet: {
-                                    kind: 'SelectionSet',
+                                    kind: Kind.SELECTION_SET,
                                     selections: [
                                         {
-                                            kind: 'FragmentSpread',
+                                            kind: Kind.FRAGMENT_SPREAD,
                                             name: {
-                                                kind: 'Name',
+                                                kind: Kind.NAME,
                                                 value: 'ProductWithVariants',
                                             },
                                             directives: [],
@@ -72,55 +72,55 @@ describe('addCustomFields()', () => {
                     },
                 },
                 {
-                    kind: 'FragmentDefinition',
+                    kind: Kind.FRAGMENT_DEFINITION,
                     name: {
-                        kind: 'Name',
+                        kind: Kind.NAME,
                         value: 'ProductWithVariants',
                     },
                     typeCondition: {
-                        kind: 'NamedType',
+                        kind: Kind.NAMED_TYPE,
                         name: {
-                            kind: 'Name',
+                            kind: Kind.NAME,
                             value: 'Product',
                         },
                     },
                     directives: [],
                     selectionSet: {
-                        kind: 'SelectionSet',
+                        kind: Kind.SELECTION_SET,
                         selections: [
                             {
-                                kind: 'Field',
+                                kind: Kind.FIELD,
                                 name: {
-                                    kind: 'Name',
+                                    kind: Kind.NAME,
                                     value: 'id',
                                 },
                                 arguments: [],
                                 directives: [],
                             },
                             {
-                                kind: 'Field',
+                                kind: Kind.FIELD,
                                 name: {
-                                    kind: 'Name',
+                                    kind: Kind.NAME,
                                     value: 'translations',
                                 },
                                 arguments: [],
                                 directives: [],
                                 selectionSet: {
-                                    kind: 'SelectionSet',
+                                    kind: Kind.SELECTION_SET,
                                     selections: [
                                         {
-                                            kind: 'Field',
+                                            kind: Kind.FIELD,
                                             name: {
-                                                kind: 'Name',
+                                                kind: Kind.NAME,
                                                 value: 'languageCode',
                                             },
                                             arguments: [],
                                             directives: [],
                                         },
                                         {
-                                            kind: 'Field',
+                                            kind: Kind.FIELD,
                                             name: {
-                                                kind: 'Name',
+                                                kind: Kind.NAME,
                                                 value: 'name',
                                             },
                                             arguments: [],
@@ -143,14 +143,13 @@ describe('addCustomFields()', () => {
     });
 
     it('Adds customFields to Product fragment', () => {
-        const customFieldsConfig: Partial<CustomFields> = {
-            Product: [
-                { name: 'custom1', type: 'string', list: false },
-                { name: 'custom2', type: 'boolean', list: false },
-            ],
-        };
+        const customFieldsConfig = new Map<string, CustomFieldConfig[]>();
+        customFieldsConfig.set('Product', [
+            { name: 'custom1', type: 'string', list: false },
+            { name: 'custom2', type: 'boolean', list: false },
+        ]);
 
-        const result = addCustomFields(documentNode, customFieldsConfig as CustomFields);
+        const result = addCustomFields(documentNode, customFieldsConfig);
         const productFragmentDef = result.definitions[1] as FragmentDefinitionNode;
         const customFieldsDef = productFragmentDef.selectionSet.selections[2] as FieldNode;
         expect(productFragmentDef.selectionSet.selections.length).toBe(3);
@@ -160,11 +159,12 @@ describe('addCustomFields()', () => {
     });
 
     it('Adds customFields to Product translations', () => {
-        const customFieldsConfig: Partial<CustomFields> = {
-            Product: [{ name: 'customLocaleString', type: 'localeString', list: false }],
-        };
+        const customFieldsConfig = new Map<string, CustomFieldConfig[]>();
+        customFieldsConfig.set('Product', [
+            { name: 'customLocaleString', type: 'localeString', list: false },
+        ]);
 
-        const result = addCustomFields(documentNode, customFieldsConfig as CustomFields);
+        const result = addCustomFields(documentNode, customFieldsConfig);
         const productFragmentDef = result.definitions[1] as FragmentDefinitionNode;
         const translationsField = productFragmentDef.selectionSet.selections[1] as FieldNode;
         const customTranslationFieldsDef = translationsField.selectionSet!.selections[2] as FieldNode;
@@ -175,17 +175,29 @@ describe('addCustomFields()', () => {
     });
 
     function addsCustomFieldsToType(type: keyof CustomFields, indexOfDefinition: number) {
-        const customFieldsConfig: Partial<CustomFields> = {
-            [type]: [{ name: 'custom', type: 'boolean' }],
-        };
+        const customFieldsConfig = new Map<string, CustomFieldConfig[]>();
+        customFieldsConfig.set(type, [{ name: 'custom', type: 'boolean', list: false }]);
 
-        const result = addCustomFields(documentNode, customFieldsConfig as CustomFields);
+        const result = addCustomFields(documentNode, customFieldsConfig);
         const fragmentDef = result.definitions[indexOfDefinition] as FragmentDefinitionNode;
         const customFieldsDef = fragmentDef.selectionSet.selections[0] as FieldNode;
         expect(fragmentDef.selectionSet.selections.length).toBe(1);
         expect(customFieldsDef.selectionSet!.selections.length).toBe(1);
         expect((customFieldsDef.selectionSet!.selections[0] as FieldNode).name.value).toBe('custom');
     }
+
+    it('Does not duplicate customFields selection set', () => {
+        const customFieldsConfig = new Map<string, CustomFieldConfig[]>();
+        customFieldsConfig.set('Product', [{ name: 'custom', type: 'boolean', list: false }]);
+        const result1 = addCustomFields(documentNode, customFieldsConfig);
+        const result2 = addCustomFields(result1, customFieldsConfig);
+
+        const fragmentDef = result2.definitions[1] as FragmentDefinitionNode;
+        const customFieldSelections = fragmentDef.selectionSet.selections.filter(
+            s => s.kind === Kind.FIELD && s.name.value === 'customFields',
+        );
+        expect(customFieldSelections.length).toBe(1);
+    });
 
     it('Adds customFields to ProductVariant fragment', () => {
         addsCustomFieldsToType('ProductVariant', 2);

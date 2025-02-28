@@ -1,6 +1,6 @@
 import { SimpleGraphQLClient } from '@vendure/testing';
 
-import { GetRunningJobs, JobState } from '../graphql/generated-e2e-admin-types';
+import { GetRunningJobsQuery, GetRunningJobsQueryVariables } from '../graphql/generated-e2e-admin-types';
 import { GET_RUNNING_JOBS } from '../graphql/shared-definitions';
 
 /**
@@ -19,7 +19,7 @@ export async function awaitRunningJobs(
     // e.g. event debouncing is used before triggering the job.
     await new Promise(resolve => setTimeout(resolve, delay));
     do {
-        const { jobs } = await adminClient.query<GetRunningJobs.Query, GetRunningJobs.Variables>(
+        const { jobs } = await adminClient.query<GetRunningJobsQuery, GetRunningJobsQueryVariables>(
             GET_RUNNING_JOBS,
             {
                 options: {

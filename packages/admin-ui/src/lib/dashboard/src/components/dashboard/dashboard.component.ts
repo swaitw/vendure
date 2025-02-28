@@ -6,6 +6,7 @@ import {
     DashboardWidgetWidth,
     DataService,
     LocalStorageService,
+    titleSetter,
     WidgetLayout,
     WidgetLayoutDefinition,
 } from '@vendure/admin-ui/core';
@@ -21,9 +22,9 @@ import { map, tap } from 'rxjs/operators';
 })
 export class DashboardComponent implements OnInit {
     widgetLayout: WidgetLayout | undefined;
-    availableWidgetIds$: Observable<string[]>;
+    availableWidgets$: Observable<Array<{ id: string; config: DashboardWidgetConfig }>>;
     private readonly deletionMarker = '__delete__';
-
+    private setTitle = titleSetter();
     constructor(
         private dashboardWidgetService: DashboardWidgetService,
         private localStorageService: LocalStorageService,
@@ -32,11 +33,12 @@ export class DashboardComponent implements OnInit {
     ) {}
 
     ngOnInit() {
-        this.availableWidgetIds$ = this.dataService.client.userStatus().stream$.pipe(
+        this.availableWidgets$ = this.dataService.client.userStatus().stream$.pipe(
             map(({ userStatus }) => userStatus.permissions),
-            map(permissions => this.dashboardWidgetService.getAvailableIds(permissions)),
-            tap(ids => (this.widgetLayout = this.initLayout(ids))),
+            map(permissions => this.dashboardWidgetService.getAvailableWidgets(permissions)),
+            tap(widgets => (this.widgetLayout = this.initLayout(widgets.map(w => w.id)))),
         );
+        this.setTitle('breadcrumb.dashboard');
     }
 
     getClassForWidth(width: DashboardWidgetWidth): string {

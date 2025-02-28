@@ -1,13 +1,17 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Observable, of } from 'rxjs';
-import { RequestContext } from '..';
 
-import { REQUEST_CONTEXT_KEY, REQUEST_CONTEXT_MAP_KEY } from '../../common/constants';
+import { internal_getRequestContext, internal_setRequestContext, RequestContext } from '..';
 import { TransactionWrapper } from '../../connection/transaction-wrapper';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { parseContext } from '../common/parse-context';
-import { TransactionMode, TRANSACTION_MODE_METADATA_KEY } from '../decorators/transaction.decorator';
+import {
+    TRANSACTION_ISOLATION_LEVEL_METADATA_KEY,
+    TRANSACTION_MODE_METADATA_KEY,
+    TransactionIsolationLevel,
+    TransactionMode,
+} from '../decorators/transaction.decorator';
 
 /**
  * @description
@@ -23,43 +27,35 @@ export class TransactionInterceptor implements NestInterceptor {
     ) {}
 
     intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-        const { isGraphQL, req } = parseContext(context);
-        const ctx: RequestContext | undefined = (req as any)[REQUEST_CONTEXT_KEY];
-
+        const { req } = parseContext(context);
+        const ctx: RequestContext | undefined = internal_getRequestContext(req, context);
         if (ctx) {
             const transactionMode = this.reflector.get<TransactionMode>(
                 TRANSACTION_MODE_METADATA_KEY,
                 context.getHandler(),
             );
-            
+            const transactionIsolationLevel = this.reflector.get<TransactionIsolationLevel | undefined>(
+                TRANSACTION_ISOLATION_LEVEL_METADATA_KEY,
+                context.getHandler(),
+            );
+
             return of(
                 this.transactionWrapper.executeInTransaction(
                     ctx,
-                    (ctx) => {
-                        this.registerTransactionalContext(ctx, context.getHandler(), req);
+                    _ctx => {
+                        // Registers transactional request context associated
+                        // with execution handler function
+                        internal_setRequestContext(req, _ctx, context);
 
-                        return next.handle()
+                        return next.handle();
                     },
                     transactionMode,
+                    transactionIsolationLevel,
                     this.connection.rawConnection,
-                )
+                ),
             );
         } else {
             return next.handle();
         }
-    }
-
-    /**
-     * Registers transactional request context associated with execution handler function
-     * 
-     * @param ctx transactional request context
-     * @param handler handler function from ExecutionContext
-     * @param req Request object
-     */
-    registerTransactionalContext(ctx: RequestContext, handler: Function, req: any) {
-        const map: Map<Function, RequestContext> = req[REQUEST_CONTEXT_MAP_KEY] || new Map();
-        map.set(handler, ctx);
-
-        req[REQUEST_CONTEXT_MAP_KEY] = map;
     }
 }

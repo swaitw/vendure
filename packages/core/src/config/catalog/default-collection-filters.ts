@@ -1,11 +1,13 @@
 import { LanguageCode } from '@vendure/common/lib/generated-types';
-import { customAlphabet } from 'nanoid';
 
 import { ConfigArgDef } from '../../common/configurable-operation';
 import { UserInputError } from '../../common/error/errors';
 import { ProductVariant } from '../../entity/product-variant/product-variant.entity';
 
 import { CollectionFilter } from './collection-filter';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { customAlphabet } = require('nanoid');
 
 /**
  * @description
@@ -14,7 +16,7 @@ import { CollectionFilter } from './collection-filter';
  */
 export function randomSuffix(prefix: string) {
     const nanoid = customAlphabet('123456789abcdefghijklmnopqrstuvwxyz', 6);
-    return `${prefix}_${nanoid()}`;
+    return `${prefix}_${nanoid() as string}`;
 }
 
 /**
@@ -28,6 +30,7 @@ export const combineWithAndArg: ConfigArgDef<'boolean'> = {
     description: [
         {
             languageCode: LanguageCode.en,
+            // eslint-disable-next-line max-len
             value: 'If this filter is being combined with other filters, do all conditions need to be satisfied (AND), or just one or the other (OR)?',
         },
     ],
@@ -56,7 +59,9 @@ export const facetValueCollectionFilter = new CollectionFilter({
             description: [
                 {
                     languageCode: LanguageCode.en,
-                    value: 'If checked, product variants must have at least one of the selected facet values. If not checked, the variant must have all selected values.',
+                    value:
+                        'If checked, product variants must have at least one of the selected facet values. ' +
+                        'If not checked, the variant must have all selected values.',
                 },
             ],
         },
@@ -142,8 +147,8 @@ export const variantNameCollectionFilter = new CollectionFilter({
     code: 'variant-name-filter',
     description: [{ languageCode: LanguageCode.en, value: 'Filter by product variant name' }],
     apply: (qb, args) => {
-        let translationAlias = `variant_name_filter_translation`;
-        const termName = randomSuffix(`term`);
+        let translationAlias = 'variant_name_filter_translation';
+        const termName = randomSuffix('term');
         const translationsJoin = qb.expressionMap.joinAttributes.find(
             ja => ja.entityOrProperty === 'productVariant.translations',
         );
@@ -207,15 +212,19 @@ export const variantIdCollectionFilter = new CollectionFilter({
     code: 'variant-id-filter',
     description: [{ languageCode: LanguageCode.en, value: 'Manually select product variants' }],
     apply: (qb, args) => {
-        if (args.variantIds.length === 0) {
-            return qb;
-        }
-        const variantIdsKey = randomSuffix(`variantIds`);
+        const emptyIds = args.variantIds.length === 0;
+        const variantIdsKey = randomSuffix('variantIds');
         const clause = `productVariant.id IN (:...${variantIdsKey})`;
         const params = { [variantIdsKey]: args.variantIds };
         if (args.combineWithAnd === false) {
+            if (emptyIds) {
+                return qb;
+            }
             return qb.orWhere(clause, params);
         } else {
+            if (emptyIds) {
+                return qb.andWhere('1 = 0');
+            }
             return qb.andWhere(clause, params);
         }
     },
@@ -237,15 +246,19 @@ export const productIdCollectionFilter = new CollectionFilter({
     code: 'product-id-filter',
     description: [{ languageCode: LanguageCode.en, value: 'Manually select products' }],
     apply: (qb, args) => {
-        if (args.productIds.length === 0) {
-            return qb;
-        }
-        const productIdsKey = randomSuffix(`productIds`);
+        const emptyIds = args.productIds.length === 0;
+        const productIdsKey = randomSuffix('productIds');
         const clause = `productVariant.productId IN (:...${productIdsKey})`;
         const params = { [productIdsKey]: args.productIds };
         if (args.combineWithAnd === false) {
+            if (emptyIds) {
+                return qb;
+            }
             return qb.orWhere(clause, params);
         } else {
+            if (emptyIds) {
+                return qb.andWhere('1 = 0');
+            }
             return qb.andWhere(clause, params);
         }
     },

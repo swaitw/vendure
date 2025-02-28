@@ -1,5 +1,6 @@
 import { Client } from '@elastic/elasticsearch';
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { unique } from '@vendure/common/lib/unique';
 import {
     Asset,
@@ -11,9 +12,11 @@ import {
     EntityRelationPaths,
     FacetValue,
     ID,
+    Injector,
     InternalServerError,
     LanguageCode,
     Logger,
+    MutableRequestContext,
     Product,
     ProductPriceApplicator,
     ProductVariant,
@@ -25,8 +28,9 @@ import {
     Translation,
 } from '@vendure/core';
 import { Observable } from 'rxjs';
+import { In, IsNull } from 'typeorm';
 
-import { ELASTIC_SEARCH_OPTIONS, loggerCtx, VARIANT_INDEX_NAME } from '../constants';
+import { ELASTIC_SEARCH_OPTIONS, VARIANT_INDEX_NAME, loggerCtx } from '../constants';
 import { ElasticsearchOptions } from '../options';
 import {
     BulkOperation,
@@ -44,13 +48,8 @@ import {
 } from '../types';
 
 import { createIndices, getClient, getIndexNameByAlias } from './indexing-utils';
-import { MutableRequestContext } from './mutable-request-context';
-
-const REINDEX_CHUNK_SIZE = 2500;
-const REINDEX_OPERATION_CHUNK_SIZE = 3000;
 
 export const defaultProductRelations: Array<EntityRelationPaths<Product>> = [
-    'variants',
     'featuredAsset',
     'facetValues',
     'facetValues.facet',
@@ -85,6 +84,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
     private asyncQueue = new AsyncQueue('elasticsearch-indexer', 5);
     private productRelations: Array<EntityRelationPaths<Product>>;
     private variantRelations: Array<EntityRelationPaths<ProductVariant>>;
+    private injector: Injector;
 
     constructor(
         private connection: TransactionalConnection,
@@ -93,6 +93,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
         private configService: ConfigService,
         private productVariantService: ProductVariantService,
         private requestContextCache: RequestContextCacheService,
+        private moduleRef: ModuleRef,
     ) {}
 
     onModuleInit(): any {
@@ -105,6 +106,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
             defaultVariantRelations,
             this.options.hydrateProductVariantRelations,
         );
+        this.injector = new Injector(this.moduleRef);
     }
 
     onModuleDestroy(): any {
@@ -124,11 +126,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
      * Updates the search index only for the affected product.
      */
     async deleteProduct({ ctx: rawContext, productId }: UpdateProductMessageData): Promise<boolean> {
-        const operations = await this.deleteProductOperations(
-            RequestContext.deserialize(rawContext),
-            productId,
-        );
-        await this.executeBulkOperations(operations);
+        await this.deleteProductOperations(RequestContext.deserialize(rawContext), productId);
         return true;
     }
 
@@ -222,7 +220,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                         });
                     }
                 }
-                Logger.verbose(`Completed updating variants`, loggerCtx);
+                Logger.verbose('Completed updating variants', loggerCtx);
                 return {
                     total: productIds.length,
                     completed: productIds.length,
@@ -239,9 +237,9 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                 const ctx = MutableRequestContext.deserialize(rawContext);
 
                 const reindexTempName = new Date().getTime();
-                const variantIndexName = this.options.indexPrefix + VARIANT_INDEX_NAME;
-                const variantIndexNameForReindex = VARIANT_INDEX_NAME + `-reindex-${reindexTempName}`;
-                const reindexVariantAliasName = this.options.indexPrefix + variantIndexNameForReindex;
+                const variantIndexName = `${this.options.indexPrefix}${VARIANT_INDEX_NAME}`;
+                const variantIndexNameForReindex = `${VARIANT_INDEX_NAME}-reindex-${reindexTempName}`;
+                const reindexVariantAliasName = `${this.options.indexPrefix}${variantIndexNameForReindex}`;
                 try {
                     await createIndices(
                         this.client,
@@ -251,13 +249,13 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                         true,
                         `-reindex-${reindexTempName}`,
                     );
-                } catch (e) {
-                    Logger.error(`Could not recreate indices.`, loggerCtx);
+                } catch (e: any) {
+                    Logger.error('Could not recreate indices.', loggerCtx);
                     Logger.error(JSON.stringify(e), loggerCtx);
                     throw e;
                 }
 
-                const totalProductIds = await this.connection
+                const totalProductIds = await this.connection.rawConnection
                     .getRepository(Product)
                     .createQueryBuilder('product')
                     .where('product.deletedAt IS NULL')
@@ -269,19 +267,17 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                 let skip = 0;
                 let finishedProductsCount = 0;
                 do {
-                    const operations: BulkVariantOperation[] = [];
-
-                    productIds = await this.connection
+                    productIds = await this.connection.rawConnection
                         .getRepository(Product)
                         .createQueryBuilder('product')
                         .select('product.id')
                         .where('product.deletedAt IS NULL')
                         .skip(skip)
-                        .take(REINDEX_CHUNK_SIZE)
+                        .take(this.options.reindexProductsChunkSize)
                         .getMany();
 
                     for (const { id: productId } of productIds) {
-                        operations.push(...(await this.updateProductsOperationsOnly(ctx, productId)));
+                        await this.updateProductsOperationsOnly(ctx, productId, variantIndexNameForReindex);
                         finishedProductsCount++;
                         observer.next({
                             total: totalProductIds,
@@ -290,100 +286,15 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                         });
                     }
 
-                    Logger.verbose(`Will execute ${operations.length} bulk update operations`, loggerCtx);
-
-                    // Because we can have a huge amount of variant for 1 product, we also chunk update operations
-                    await this.executeBulkOperationsByChunks(
-                        REINDEX_OPERATION_CHUNK_SIZE,
-                        operations,
-                        variantIndexNameForReindex,
-                    );
-
-                    skip += REINDEX_CHUNK_SIZE;
+                    skip += this.options.reindexProductsChunkSize;
 
                     Logger.verbose(`Done ${finishedProductsCount} / ${totalProductIds} products`);
-                } while (productIds.length >= REINDEX_CHUNK_SIZE);
+                } while (productIds.length >= this.options.reindexProductsChunkSize);
 
                 // Switch the index to the new reindexed one
-                try {
-                    const reindexVariantAliasExist = await this.client.indices.existsAlias({
-                        name: reindexVariantAliasName,
-                    });
-                    if (reindexVariantAliasExist) {
-                        const reindexVariantIndexName = await getIndexNameByAlias(
-                            this.client,
-                            reindexVariantAliasName,
-                        );
-                        const originalVariantAliasExist = await this.client.indices.existsAlias({
-                            name: variantIndexName,
-                        });
-                        const originalVariantIndexExist = await this.client.indices.exists({
-                            index: variantIndexName,
-                        });
+                await this.switchAlias(reindexVariantAliasName, variantIndexName);
 
-                        const originalVariantIndexName = await getIndexNameByAlias(
-                            this.client,
-                            variantIndexName,
-                        );
-
-                        const actions = [
-                            {
-                                remove: {
-                                    index: reindexVariantIndexName,
-                                    alias: reindexVariantAliasName,
-                                },
-                            },
-                            {
-                                add: {
-                                    index: reindexVariantIndexName,
-                                    alias: variantIndexName,
-                                },
-                            },
-                        ];
-
-                        if (originalVariantAliasExist.body) {
-                            actions.push({
-                                remove: {
-                                    index: originalVariantIndexName,
-                                    alias: variantIndexName,
-                                },
-                            });
-                        } else if (originalVariantIndexExist.body) {
-                            await this.client.indices.delete({
-                                index: [variantIndexName],
-                            });
-                        }
-
-                        await this.client.indices.updateAliases({
-                            body: {
-                                actions,
-                            },
-                        });
-
-                        if (originalVariantAliasExist.body) {
-                            await this.client.indices.delete({
-                                index: [originalVariantIndexName],
-                            });
-                        }
-                    }
-                } catch (e) {
-                    Logger.error('Could not switch indexes');
-                } finally {
-                    const reindexVariantAliasExist = await this.client.indices.existsAlias({
-                        name: reindexVariantAliasName,
-                    });
-                    if (reindexVariantAliasExist.body) {
-                        const reindexVariantAliasResult = await this.client.indices.getAlias({
-                            name: reindexVariantAliasName,
-                        });
-                        const reindexVariantIndexName = Object.keys(reindexVariantAliasResult.body)[0];
-                        await this.client.indices.delete({
-                            index: [reindexVariantIndexName],
-                        });
-                    }
-                }
-
-                Logger.verbose(`Completed reindexing!`, loggerCtx);
+                Logger.verbose('Completed reindexing!', loggerCtx);
 
                 return {
                     total: totalProductIds,
@@ -399,6 +310,10 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
         operations: BulkVariantOperation[],
         index = VARIANT_INDEX_NAME,
     ): Promise<void> {
+        Logger.verbose(
+            `Will execute ${operations.length} bulk update operations with index ${index}`,
+            loggerCtx,
+        );
         let i;
         let j;
         let processedOperation = 0;
@@ -474,7 +389,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
             },
         });
         for (const failure of result1.body.failures) {
-            Logger.error(`${failure.cause.type}: ${failure.cause.reason}`, loggerCtx);
+            Logger.error(`${failure.cause.type as string}: ${failure.cause.reason as string}`, loggerCtx);
         }
         const result2 = await this.client.update_by_query({
             index: this.options.indexPrefix + indexName,
@@ -488,106 +403,162 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
             },
         });
         for (const failure of result1.body.failures) {
-            Logger.error(`${failure.cause.type}: ${failure.cause.reason}`, loggerCtx);
+            Logger.error(`${failure.cause.type as string}: ${failure.cause.reason as string}`, loggerCtx);
         }
         return result1.body.failures.length === 0 && result2.body.failures === 0;
     }
 
     private async updateProductsInternal(ctx: MutableRequestContext, productIds: ID[]) {
-        const operations = await this.updateProductsOperations(ctx, productIds);
-        await this.executeBulkOperations(operations);
+        await this.updateProductsOperations(ctx, productIds);
+    }
+
+    private async switchAlias(reindexVariantAliasName: string, variantIndexName: string): Promise<void> {
+        try {
+            const reindexVariantAliasExist = await this.client.indices.existsAlias({
+                name: reindexVariantAliasName,
+            });
+            if (reindexVariantAliasExist) {
+                const reindexVariantIndexName = await getIndexNameByAlias(
+                    this.client,
+                    reindexVariantAliasName,
+                );
+                const originalVariantAliasExist = await this.client.indices.existsAlias({
+                    name: variantIndexName,
+                });
+                const originalVariantIndexExist = await this.client.indices.exists({
+                    index: variantIndexName,
+                });
+
+                const originalVariantIndexName = await getIndexNameByAlias(this.client, variantIndexName);
+
+                const actions = [
+                    {
+                        remove: {
+                            index: reindexVariantIndexName,
+                            alias: reindexVariantAliasName,
+                        },
+                    },
+                    {
+                        add: {
+                            index: reindexVariantIndexName,
+                            alias: variantIndexName,
+                        },
+                    },
+                ];
+
+                if (originalVariantAliasExist.body) {
+                    actions.push({
+                        remove: {
+                            index: originalVariantIndexName,
+                            alias: variantIndexName,
+                        },
+                    });
+                } else if (originalVariantIndexExist.body) {
+                    await this.client.indices.delete({
+                        index: [variantIndexName],
+                    });
+                }
+
+                await this.client.indices.updateAliases({
+                    body: {
+                        actions,
+                    },
+                });
+
+                if (originalVariantAliasExist.body) {
+                    await this.client.indices.delete({
+                        index: [originalVariantIndexName],
+                    });
+                }
+            }
+        } catch (e: any) {
+            Logger.error('Could not switch indexes');
+        } finally {
+            const reindexVariantAliasExist = await this.client.indices.existsAlias({
+                name: reindexVariantAliasName,
+            });
+            if (reindexVariantAliasExist.body) {
+                const reindexVariantAliasResult = await this.client.indices.getAlias({
+                    name: reindexVariantAliasName,
+                });
+                const reindexVariantIndexName = Object.keys(reindexVariantAliasResult.body)[0];
+                await this.client.indices.delete({
+                    index: [reindexVariantIndexName],
+                });
+            }
+        }
     }
 
     private async updateProductsOperationsOnly(
         ctx: MutableRequestContext,
         productId: ID,
-    ): Promise<BulkVariantOperation[]> {
-        const operations: BulkVariantOperation[] = [];
+        index = VARIANT_INDEX_NAME,
+    ): Promise<void> {
+        let operations: BulkVariantOperation[] = [];
         let product: Product | undefined;
         try {
-            product = await this.connection.getRepository(Product).findOne(productId, {
-                relations: this.productRelations,
-                where: {
-                    deletedAt: null,
-                },
-            });
-        } catch (e) {
+            product = await this.connection
+                .getRepository(ctx, Product)
+                .find({
+                    where: { id: productId, deletedAt: IsNull() },
+                    relations: this.productRelations,
+                })
+                .then(result => result[0] ?? undefined);
+        } catch (e: any) {
             Logger.error(e.message, loggerCtx, e.stack);
             throw e;
         }
-        if (product) {
-            const updatedProductVariants = await this.connection.getRepository(ProductVariant).findByIds(
-                product.variants.map(v => v.id),
-                {
-                    relations: this.variantRelations,
-                    where: {
-                        deletedAt: null,
-                    },
-                    order: {
-                        id: 'ASC',
-                    },
+        if (!product) {
+            return;
+        }
+        let updatedProductVariants: ProductVariant[] = [];
+        try {
+            updatedProductVariants = await this.connection.rawConnection.getRepository(ProductVariant).find({
+                relations: this.variantRelations,
+                where: {
+                    productId,
+                    deletedAt: IsNull(),
                 },
+                order: {
+                    id: 'ASC',
+                },
+            });
+        } catch (e: any) {
+            Logger.error(e.message, loggerCtx, e.stack);
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        updatedProductVariants.forEach(variant => (variant.product = product!));
+        if (!product.enabled) {
+            updatedProductVariants.forEach(v => (v.enabled = false));
+        }
+
+        Logger.debug(`Updating Product (${productId})`, loggerCtx);
+        const languageVariants: LanguageCode[] = [];
+        languageVariants.push(...product.translations.map(t => t.languageCode));
+        for (const variant of updatedProductVariants)
+            languageVariants.push(...variant.translations.map(t => t.languageCode));
+
+        const uniqueLanguageVariants = unique(languageVariants);
+        const originalChannel = ctx.channel;
+        for (const channel of product.channels) {
+            ctx.setChannel(channel);
+            const variantsInChannel = updatedProductVariants.filter(v =>
+                v.channels.map(c => c.id).includes(ctx.channelId),
             );
-            // tslint:disable-next-line:no-non-null-assertion
-            updatedProductVariants.forEach(variant => (variant.product = product!));
-            if (!product.enabled) {
-                updatedProductVariants.forEach(v => (v.enabled = false));
-            }
-            Logger.debug(`Updating Product (${productId})`, loggerCtx);
-            const languageVariants: LanguageCode[] = [];
-            languageVariants.push(...product.translations.map(t => t.languageCode));
-            for (const variant of product.variants) {
-                languageVariants.push(...variant.translations.map(t => t.languageCode));
-            }
-            const uniqueLanguageVariants = unique(languageVariants);
+            for (const variant of variantsInChannel)
+                await this.productPriceApplicator.applyChannelPriceAndTax(variant, ctx);
 
-            for (const channel of product.channels) {
-                ctx.setChannel(channel);
-
-                const variantsInChannel = updatedProductVariants.filter(v =>
-                    v.channels.map(c => c.id).includes(ctx.channelId),
-                );
-                for (const variant of variantsInChannel) {
-                    await this.productPriceApplicator.applyChannelPriceAndTax(variant, ctx);
-                }
-                for (const languageCode of uniqueLanguageVariants) {
-                    if (variantsInChannel.length) {
-                        for (const variant of variantsInChannel) {
-                            operations.push(
-                                {
-                                    index: VARIANT_INDEX_NAME,
-                                    operation: {
-                                        update: {
-                                            _id: ElasticsearchIndexerController.getId(
-                                                variant.id,
-                                                ctx.channelId,
-                                                languageCode,
-                                            ),
-                                        },
-                                    },
-                                },
-                                {
-                                    index: VARIANT_INDEX_NAME,
-                                    operation: {
-                                        doc: await this.createVariantIndexItem(
-                                            variant,
-                                            variantsInChannel,
-                                            ctx,
-                                            languageCode,
-                                        ),
-                                        doc_as_upsert: true,
-                                    },
-                                },
-                            );
-                        }
-                    } else {
+            for (const languageCode of uniqueLanguageVariants) {
+                if (variantsInChannel.length) {
+                    for (const variant of variantsInChannel) {
                         operations.push(
                             {
                                 index: VARIANT_INDEX_NAME,
                                 operation: {
                                     update: {
                                         _id: ElasticsearchIndexerController.getId(
-                                            -product.id,
+                                            variant.id,
                                             ctx.channelId,
                                             languageCode,
                                         ),
@@ -597,31 +568,80 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                             {
                                 index: VARIANT_INDEX_NAME,
                                 operation: {
-                                    doc: this.createSyntheticProductIndexItem(product, ctx, languageCode),
+                                    doc: await this.createVariantIndexItem(
+                                        variant,
+                                        variantsInChannel,
+                                        ctx,
+                                        languageCode,
+                                    ),
                                     doc_as_upsert: true,
                                 },
                             },
                         );
+
+                        if (operations.length >= this.options.reindexBulkOperationSizeLimit) {
+                            // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+                            await this.executeBulkOperationsByChunks(
+                                this.options.reindexBulkOperationSizeLimit,
+                                operations,
+                                index,
+                            );
+                            operations = [];
+                        }
                     }
+                } else {
+                    operations.push(
+                        {
+                            index: VARIANT_INDEX_NAME,
+                            operation: {
+                                update: {
+                                    _id: ElasticsearchIndexerController.getId(
+                                        -product.id,
+                                        ctx.channelId,
+                                        languageCode,
+                                    ),
+                                },
+                            },
+                        },
+                        {
+                            index: VARIANT_INDEX_NAME,
+                            operation: {
+                                doc: await this.createSyntheticProductIndexItem(product, ctx, languageCode),
+                                doc_as_upsert: true,
+                            },
+                        },
+                    );
+                }
+                if (operations.length >= this.options.reindexBulkOperationSizeLimit) {
+                    // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+                    await this.executeBulkOperationsByChunks(
+                        this.options.reindexBulkOperationSizeLimit,
+                        operations,
+                        index,
+                    );
+                    operations = [];
                 }
             }
         }
+        ctx.setChannel(originalChannel);
 
-        return operations;
+        // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+        await this.executeBulkOperationsByChunks(
+            this.options.reindexBulkOperationSizeLimit,
+            operations,
+            index,
+        );
+
+        return;
     }
 
-    private async updateProductsOperations(
-        ctx: MutableRequestContext,
-        productIds: ID[],
-    ): Promise<BulkVariantOperation[]> {
+    private async updateProductsOperations(ctx: MutableRequestContext, productIds: ID[]): Promise<void> {
         Logger.debug(`Updating ${productIds.length} Products`, loggerCtx);
-        const operations: BulkVariantOperation[] = [];
-
         for (const productId of productIds) {
-            operations.push(...(await this.deleteProductOperations(ctx, productId)));
-            operations.push(...(await this.updateProductsOperationsOnly(ctx, productId)));
+            await this.deleteProductOperations(ctx, productId);
+            await this.updateProductsOperationsOnly(ctx, productId);
         }
-        return operations;
+        return;
     }
 
     /**
@@ -642,10 +662,10 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
         for (const relation of hydratedRelations) {
             let path = relation.split('.');
             if (path[0] === 'customFields') {
-                if (2 < path.length) {
+                if (path.length > 2) {
                     throw new InternalServerError(
                         [
-                            `hydrateProductRelations / hydrateProductVariantRelations does not currently support nested custom field relations`,
+                            'hydrateProductRelations / hydrateProductVariantRelations does not currently support nested custom field relations',
                             `Received: "${relation}"`,
                         ].join('\n'),
                     );
@@ -667,28 +687,42 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
     private async deleteProductOperations(
         ctx: RequestContext,
         productId: ID,
-    ): Promise<BulkVariantOperation[]> {
-        const channels = await this.requestContextCache.get(ctx, `elastic-index-all-channels`, () =>
-            this.connection
+        index: string = VARIANT_INDEX_NAME,
+    ): Promise<void> {
+        const channels = await this.requestContextCache.get(ctx, 'elastic-index-all-channels', () =>
+            this.connection.rawConnection
                 .getRepository(Channel)
                 .createQueryBuilder('channel')
                 .select('channel.id')
                 .getMany(),
         );
-        const product = await this.connection.getRepository(Product).findOne(productId, {
-            relations: ['variants'],
-        });
-        if (!product) {
-            return [];
-        }
+
+        const product = await this.connection
+            .getRepository(ctx, Product)
+            .createQueryBuilder('product')
+            .select([
+                'product.id',
+                'productVariant.id',
+                'productTranslations.languageCode',
+                'productVariantTranslations.languageCode',
+            ])
+            .leftJoin('product.translations', 'productTranslations')
+            .leftJoin('product.variants', 'productVariant')
+            .leftJoin('productVariant.translations', 'productVariantTranslations')
+            .leftJoin('product.channels', 'channel')
+            .where('product.id = :productId', { productId })
+            .andWhere('channel.id = :channelId', { channelId: ctx.channelId })
+            .getOne();
+
+        if (!product) return;
 
         Logger.debug(`Deleting 1 Product (id: ${productId})`, loggerCtx);
-        const operations: BulkVariantOperation[] = [];
+        let operations: BulkVariantOperation[] = [];
         const languageVariants: LanguageCode[] = [];
         languageVariants.push(...product.translations.map(t => t.languageCode));
-        for (const variant of product.variants) {
+        for (const variant of product.variants)
             languageVariants.push(...variant.translations.map(t => t.languageCode));
-        }
+
         const uniqueLanguageVariants = unique(languageVariants);
 
         for (const { id: channelId } of channels) {
@@ -701,25 +735,42 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                         },
                     },
                 });
+                if (operations.length >= this.options.reindexBulkOperationSizeLimit) {
+                    // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+                    await this.executeBulkOperationsByChunks(
+                        this.options.reindexBulkOperationSizeLimit,
+                        operations,
+                        index,
+                    );
+                    operations = [];
+                }
             }
         }
-        operations.push(
-            ...(await this.deleteVariantsInternalOperations(
-                product.variants,
-                channels.map(c => c.id),
-                uniqueLanguageVariants,
-            )),
+        // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+        await this.executeBulkOperationsByChunks(
+            this.options.reindexBulkOperationSizeLimit,
+            operations,
+            index,
         );
-        return operations;
+
+        await this.deleteVariantsInternalOperations(
+            product.variants,
+            channels.map(c => c.id),
+            uniqueLanguageVariants,
+            index,
+        );
+
+        return;
     }
 
     private async deleteVariantsInternalOperations(
         variants: ProductVariant[],
         channelIds: ID[],
         languageVariants: LanguageCode[],
-    ): Promise<BulkVariantOperation[]> {
+        index = VARIANT_INDEX_NAME,
+    ): Promise<void> {
         Logger.debug(`Deleting ${variants.length} ProductVariants`, loggerCtx);
-        const operations: BulkVariantOperation[] = [];
+        let operations: BulkVariantOperation[] = [];
         for (const variant of variants) {
             for (const channelId of channelIds) {
                 for (const languageCode of languageVariants) {
@@ -735,14 +786,30 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                             },
                         },
                     });
+                    if (operations.length >= this.options.reindexBulkOperationSizeLimit) {
+                        // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+                        await this.executeBulkOperationsByChunks(
+                            this.options.reindexBulkOperationSizeLimit,
+                            operations,
+                            index,
+                        );
+                        operations = [];
+                    }
                 }
             }
         }
-        return operations;
+        // Because we can have a huge amount of variant for 1 product, we also chunk update operations
+        await this.executeBulkOperationsByChunks(
+            this.options.reindexBulkOperationSizeLimit,
+            operations,
+            index,
+        );
+        return;
     }
 
     private async getProductIdsByVariantIds(variantIds: ID[]): Promise<ID[]> {
-        const variants = await this.connection.getRepository(ProductVariant).findByIds(variantIds, {
+        const variants = await this.connection.getRepository(ProductVariant).find({
+            where: { id: In(variantIds) },
             relations: ['product'],
             loadEagerRelations: false,
         });
@@ -797,8 +864,8 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
                 );
             }
             return body;
-        } catch (e) {
-            Logger.error(`Error when attempting to run bulk operations [${e.toString()}]`, loggerCtx);
+        } catch (e: any) {
+            Logger.error(`Error when attempting to run bulk operations [${JSON.stringify(e)}]`, loggerCtx);
             Logger.error('Error details: ' + JSON.stringify(e.body?.error, null, 2), loggerCtx);
         }
     }
@@ -873,17 +940,23 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
             };
             const variantCustomMappings = Object.entries(this.options.customProductVariantMappings);
             for (const [name, def] of variantCustomMappings) {
-                item[`variant-${name}`] = def.valueFn(v, languageCode);
+                item[`variant-${name}`] = await def.valueFn(v, languageCode, this.injector, ctx);
             }
 
             const productCustomMappings = Object.entries(this.options.customProductMappings);
             for (const [name, def] of productCustomMappings) {
-                item[`product-${name}`] = def.valueFn(v.product, variants, languageCode);
+                item[`product-${name}`] = await def.valueFn(
+                    v.product,
+                    variants,
+                    languageCode,
+                    this.injector,
+                    ctx,
+                );
             }
             return item;
-        } catch (err) {
+        } catch (err: any) {
             Logger.error(err.toString());
-            throw Error(`Error while reindexing!`);
+            throw Error('Error while reindexing!');
         }
     }
 
@@ -904,11 +977,11 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
      * If a Product has no variants, we create a synthetic variant for the purposes
      * of making that product visible via the search query.
      */
-    private createSyntheticProductIndexItem(
+    private async createSyntheticProductIndexItem(
         product: Product,
         ctx: RequestContext,
         languageCode: LanguageCode,
-    ): VariantIndexItem {
+    ): Promise<VariantIndexItem> {
         const productTranslation = this.getTranslation(product, languageCode);
         const productAsset = product.featuredAsset;
 
@@ -929,7 +1002,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
             productVariantPreviewFocalPoint: undefined,
             price: 0,
             priceWithTax: 0,
-            currencyCode: ctx.channel.currencyCode,
+            currencyCode: ctx.currencyCode,
             description: productTranslation.description,
             facetIds: product.facetValues?.map(fv => fv.facet.id.toString()) ?? [],
             channelIds: [ctx.channelId],
@@ -952,7 +1025,7 @@ export class ElasticsearchIndexerController implements OnModuleInit, OnModuleDes
         };
         const productCustomMappings = Object.entries(this.options.customProductMappings);
         for (const [name, def] of productCustomMappings) {
-            item[`product-${name}`] = def.valueFn(product, [], languageCode);
+            item[`product-${name}`] = await def.valueFn(product, [], languageCode, this.injector, ctx);
         }
         return item;
     }

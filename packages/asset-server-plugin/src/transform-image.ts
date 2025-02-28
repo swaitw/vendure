@@ -1,6 +1,9 @@
-import sharp, { Region, ResizeOptions } from 'sharp';
+import { Logger } from '@vendure/core';
+import sharp, { FormatEnum, Region, ResizeOptions } from 'sharp';
 
-import { ImageTransformPreset } from './types';
+import { ImageTransformParameters } from './config/image-transform-strategy';
+import { loggerCtx } from './constants';
+import { ImageTransformFormat } from './types';
 
 export type Dimensions = { w: number; h: number };
 export type Point = { x: number; y: number };
@@ -10,22 +13,9 @@ export type Point = { x: number; y: number };
  */
 export async function transformImage(
     originalImage: Buffer,
-    queryParams: Record<string, string>,
-    presets: ImageTransformPreset[],
+    parameters: ImageTransformParameters,
 ): Promise<sharp.Sharp> {
-    let targetWidth = Math.round(+queryParams.w) || undefined;
-    let targetHeight = Math.round(+queryParams.h) || undefined;
-    let mode = queryParams.mode || 'crop';
-    const fpx = +queryParams.fpx || undefined;
-    const fpy = +queryParams.fpy || undefined;
-    if (queryParams.preset) {
-        const matchingPreset = presets.find(p => p.name === queryParams.preset);
-        if (matchingPreset) {
-            targetWidth = matchingPreset.width;
-            targetHeight = matchingPreset.height;
-            mode = matchingPreset.mode;
-        }
-    }
+    const { width, height, mode, format } = parameters;
     const options: ResizeOptions = {};
     if (mode === 'crop') {
         options.position = sharp.strategy.entropy;
@@ -33,22 +23,64 @@ export async function transformImage(
         options.fit = 'inside';
     }
 
-    const image = sharp(originalImage);
-    if (fpx && fpy && targetWidth && targetHeight && mode === 'crop') {
+    const image = sharp(originalImage).rotate();
+    try {
+        await applyFormat(image, parameters.format, parameters.quality);
+    } catch (e: any) {
+        Logger.error(e.message, loggerCtx, e.stack);
+    }
+    if (parameters.fpx && parameters.fpy && width && height && mode === 'crop') {
         const metadata = await image.metadata();
         if (metadata.width && metadata.height) {
-            const xCenter = fpx * metadata.width;
-            const yCenter = fpy * metadata.height;
-            const { width, height, region } = resizeToFocalPoint(
+            const xCenter = parameters.fpx * metadata.width;
+            const yCenter = parameters.fpy * metadata.height;
+            const {
+                width: resizedWidth,
+                height: resizedHeight,
+                region,
+            } = resizeToFocalPoint(
                 { w: metadata.width, h: metadata.height },
-                { w: targetWidth, h: targetHeight },
+                { w: width, h: height },
                 { x: xCenter, y: yCenter },
             );
-            return image.resize(width, height).extract(region);
+            return image.resize(resizedWidth, resizedHeight).extract(region);
         }
     }
 
-    return image.resize(targetWidth, targetHeight, options);
+    return image.resize(width, height, options);
+}
+
+async function applyFormat(
+    image: sharp.Sharp,
+    format: ImageTransformFormat | undefined,
+    quality: number | undefined,
+) {
+    switch (format) {
+        case 'jpg':
+        case 'jpeg':
+            return image.jpeg({ quality });
+        case 'png':
+            return image.png();
+        case 'webp':
+            return image.webp({ quality });
+        case 'avif':
+            return image.avif({ quality });
+        default: {
+            if (quality) {
+                // If a quality has been specified but no format, we need to determine the format from the image
+                // and apply the quality to that format.
+                const metadata = await image.metadata();
+                if (isImageTransformFormat(metadata.format)) {
+                    return applyFormat(image, metadata.format, quality);
+                }
+            }
+            return image;
+        }
+    }
+}
+
+function isImageTransformFormat(input: keyof FormatEnum | undefined): input is ImageTransformFormat {
+    return !!input && ['jpg', 'jpeg', 'webp', 'avif'].includes(input);
 }
 
 /**

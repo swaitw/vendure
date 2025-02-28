@@ -13,19 +13,15 @@ import {
 import {
     AbstractControl,
     ControlValueAccessor,
-    FormControl,
-    FormGroup,
     NG_VALIDATORS,
     NG_VALUE_ACCESSOR,
+    UntypedFormControl,
+    UntypedFormGroup,
     ValidationErrors,
     Validator,
     Validators,
 } from '@angular/forms';
-import { ConfigArgType } from '@vendure/common/lib/shared-types';
-import { assertNever } from '@vendure/common/lib/shared-utils';
 import { BehaviorSubject, Observable, Subscription } from 'rxjs';
-
-import { InputComponentConfig } from '../../../common/component-registry-types';
 import {
     ConfigArg,
     ConfigArgDefinition,
@@ -34,6 +30,7 @@ import {
 } from '../../../common/generated-types';
 import { getDefaultConfigArgValue } from '../../../common/utilities/configurable-operation-utils';
 import { interpolateDescription } from '../../../common/utilities/interpolate-description';
+import { CurrencyService } from '../../../providers/currency/currency.service';
 
 /**
  * A form input which renders a card with the internal form fields of the given ConfigurableOperation.
@@ -64,18 +61,25 @@ export class ConfigurableInputComponent
     @Input() readonly = false;
     @Input() removable = true;
     @Input() position = 0;
+    @Input() hideDescription = false;
     @Output() remove = new EventEmitter<ConfigurableOperation>();
     argValues: { [name: string]: any } = {};
     onChange: (val: any) => void;
     onTouch: () => void;
-    form = new FormGroup({});
+    form = new UntypedFormGroup({});
     positionChange$: Observable<number>;
     private positionChangeSubject = new BehaviorSubject<number>(0);
     private subscription: Subscription;
 
+    constructor(private currencyService: CurrencyService) {}
+
     interpolateDescription(): string {
         if (this.operationDefinition) {
-            return interpolateDescription(this.operationDefinition, this.form.value);
+            return interpolateDescription(
+                this.operationDefinition,
+                this.form.value,
+                this.currencyService.precisionFactor,
+            );
         } else {
             return '';
         }
@@ -137,7 +141,7 @@ export class ConfigurableInputComponent
         if (this.subscription) {
             this.subscription.unsubscribe();
         }
-        this.form = new FormGroup({});
+        this.form = new UntypedFormGroup({});
         (this.form as any).__id = Math.random().toString(36).substr(10);
 
         if (this.operation.args) {
@@ -147,7 +151,7 @@ export class ConfigurableInputComponent
                     value = getDefaultConfigArgValue(arg);
                 }
                 const validators = arg.list ? undefined : arg.required ? Validators.required : undefined;
-                this.form.addControl(arg.name, new FormControl(value, validators));
+                this.form.addControl(arg.name, new UntypedFormControl(value, validators));
             }
         }
 

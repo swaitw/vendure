@@ -1,5 +1,14 @@
 import { ClientOptions } from '@elastic/elasticsearch';
-import { DeepRequired, EntityRelationPaths, ID, LanguageCode, Product, ProductVariant } from '@vendure/core';
+import {
+    DeepRequired,
+    EntityRelationPaths,
+    ID,
+    Injector,
+    LanguageCode,
+    Product,
+    ProductVariant,
+    RequestContext
+} from '@vendure/core';
 import deepmerge from 'deepmerge';
 
 import {
@@ -7,7 +16,6 @@ import {
     CustomScriptMapping,
     ElasticSearchInput,
     ElasticSearchSortInput,
-    ElasticSearchSortParameter,
     GraphQlPrimitive,
     PrimitiveTypeVariations,
 } from './types';
@@ -16,7 +24,7 @@ import {
  * @description
  * Configuration options for the {@link ElasticsearchPlugin}.
  *
- * @docsCategory ElasticsearchPlugin
+ * @docsCategory core plugins/ElasticsearchPlugin
  * @docsPage ElasticsearchOptions
  */
 export interface ElasticsearchOptions {
@@ -70,7 +78,7 @@ export interface ElasticsearchOptions {
      * are directly passed to index settings. To apply some settings indices will be recreated.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * // Configuring an English stemmer
      * indexSettings: {
      *   analysis: {
@@ -107,7 +115,7 @@ export interface ElasticsearchOptions {
      * After changing this option indices will be recreated.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * // Configuring custom analyzer for the `productName` field.
      * indexMappingProperties: {
      *   productName: {
@@ -127,7 +135,7 @@ export interface ElasticsearchOptions {
      * need to prefix the name with `'product-<name>'` or `'variant-<name>'` respectively, e.g.:
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * customProductMappings: {
      *    variantCount: {
      *        graphQlType: 'Int!',
@@ -150,12 +158,22 @@ export interface ElasticsearchOptions {
     };
     /**
      * @description
-     * Batch size for bulk operations (e.g. when rebuilding the indices).
+     * Products limit chunk size for each loop iteration when indexing products.
      *
-     * @default
-     * 2000
+     * @default 2500
+     * @since 2.1.7
      */
-    batchSize?: number;
+    reindexProductsChunkSize?: number;
+    /**
+     * @description
+     * Index operations are performed in bulk, with each bulk operation containing a number of individual
+     * index operations. This option sets the maximum number of operations in the memory buffer before a
+     * bulk operation is executed.
+     *
+     * @default 3000
+     * @since 2.1.7
+     */
+    reindexBulkOperationSizeLimit?: number;
     /**
      * @description
      * Configuration of the internal Elasticsearch query.
@@ -165,7 +183,7 @@ export interface ElasticsearchOptions {
      * @description
      * Custom mappings may be defined which will add the defined data to the
      * Elasticsearch index and expose that data via the SearchResult GraphQL type,
-     * adding a new `customMappings` field.
+     * adding a new `customMappings`, `customProductMappings` & `customProductVariantMappings` fields.
      *
      * The `graphQlType` property may be one of `String`, `Int`, `Float`, `Boolean`, `ID` or list
      * versions thereof (`[String!]` etc) and can be appended with a `!` to indicate non-nullable fields.
@@ -175,10 +193,11 @@ export interface ElasticsearchOptions {
      * parsed to the elasticsearch index.
      *
      * This config option defines custom mappings which are accessible when the "groupByProduct"
-     * input options is set to `true`.
+     * input options is set to `true`. In addition, custom variant mappings can be accessed by using
+     * the `customProductVariantMappings` field, which is always available.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * customProductMappings: {
      *    variantCount: {
      *        graphQlType: 'Int!',
@@ -198,13 +217,17 @@ export interface ElasticsearchOptions {
      * ```
      *
      * @example
-     * ```SDL
+     * ```graphql
      * query SearchProducts($input: SearchInput!) {
      *     search(input: $input) {
      *         totalItems
      *         items {
      *             productId
      *             productName
+     *             customProductMappings {
+     *                 variantCount
+     *                 reviewRating
+     *             }
      *             customMappings {
      *                 ...on CustomProductMappings {
      *                     variantCount
@@ -217,21 +240,25 @@ export interface ElasticsearchOptions {
      * ```
      */
     customProductMappings?: {
-        [fieldName: string]: CustomMapping<[Product, ProductVariant[], LanguageCode]>;
+        [fieldName: string]: CustomMapping<[Product, ProductVariant[], LanguageCode, Injector, RequestContext]>;
     };
     /**
      * @description
      * This config option defines custom mappings which are accessible when the "groupByProduct"
-     * input options is set to `false`.
+     * input options is set to `false`. In addition, custom product mappings can be accessed by using
+     * the `customProductMappings` field, which is always available.
      *
      * @example
-     * ```SDL
+     * ```graphql
      * query SearchProducts($input: SearchInput!) {
      *     search(input: $input) {
      *         totalItems
      *         items {
      *             productId
      *             productName
+     *             customProductVariantMappings {
+     *                 weight
+     *             }
      *             customMappings {
      *                 ...on CustomProductVariantMappings {
      *                     weight
@@ -243,7 +270,7 @@ export interface ElasticsearchOptions {
      * ```
      */
     customProductVariantMappings?: {
-        [fieldName: string]: CustomMapping<[ProductVariant, LanguageCode]>;
+        [fieldName: string]: CustomMapping<[ProductVariant, LanguageCode, Injector, RequestContext]>;
     };
     /**
      * @description
@@ -267,7 +294,7 @@ export interface ElasticsearchOptions {
      * before the `product` object is passed to the `valueFn`.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * {
      *   hydrateProductRelations: ['assets.asset'],
      *   customProductMappings: {
@@ -301,7 +328,7 @@ export interface ElasticsearchOptions {
      * custom `scriptFields` functions.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * extendSearchInputType: {
      *   longitude: 'Float',
      *   latitude: 'Float',
@@ -312,7 +339,7 @@ export interface ElasticsearchOptions {
      * This allows the search query to include these new fields:
      *
      * @example
-     * ```GraphQl
+     * ```graphql
      * query {
      *   search(input: {
      *     longitude: 101.7117,
@@ -339,7 +366,7 @@ export interface ElasticsearchOptions {
      * correct sort order values available inside `input` parameter of the `mapSort` option.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * extendSearchSortType: ["distance"]
      * ```
      *
@@ -362,7 +389,7 @@ export interface ElasticsearchOptions {
  * @description
  * Configuration options for the internal Elasticsearch query which is generated when performing a search.
  *
- * @docsCategory ElasticsearchPlugin
+ * @docsCategory core plugins/ElasticsearchPlugin
  * @docsPage ElasticsearchOptions
  */
 export interface SearchConfig {
@@ -422,7 +449,7 @@ export interface SearchConfig {
      * The interval used to group search results into buckets according to price range. For example, setting this to
      * `2000` will group into buckets every $20.00:
      *
-     * ```JSON
+     * ```json
      * {
      *   "data": {
      *     "search": {
@@ -459,7 +486,7 @@ export interface SearchConfig {
      * for e.g. wildcard / fuzzy searches on the index.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * mapQuery: (query, input, searchConfig, channelId, enabledOnly){
      *   if(query.bool.must){
      *     delete query.bool.must;
@@ -513,7 +540,7 @@ export interface SearchConfig {
      * [Elasticsearch script fields docs](https://www.elastic.co/guide/en/elasticsearch/reference/7.15/search-fields.html#script-fields)
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * extendSearchInputType: {
      *   latitude: 'Float',
      *   longitude: 'Float',
@@ -568,7 +595,7 @@ export interface SearchConfig {
      * If neither of those are applied it will be empty.
      *
      * @example
-     * ```TS
+     * ```ts
      * mapSort: (sort, input) => {
      *     // Assuming `extendSearchSortType: ["priority"]`
      *     // Assuming priority is never undefined
@@ -589,7 +616,7 @@ export interface SearchConfig {
      *
      * A more generic example would be a sort function based on a product location like this:
      * @example
-     * ```TS
+     * ```ts
      * extendSearchInputType: {
      *   latitude: 'Float',
      *   longitude: 'Float',
@@ -647,7 +674,7 @@ export interface SearchConfig {
  *
  * Boosting a field acts as a score multiplier for matches against that field.
  *
- * @docsCategory ElasticsearchPlugin
+ * @docsCategory core plugins/ElasticsearchPlugin
  * @docsPage ElasticsearchOptions
  */
 export interface BoostFieldsConfig {
@@ -693,15 +720,16 @@ export const defaultOptions: ElasticsearchRuntimeOptions = {
     indexPrefix: 'vendure-',
     indexSettings: {},
     indexMappingProperties: {},
-    batchSize: 2000,
+    reindexProductsChunkSize: 2500,
+    reindexBulkOperationSizeLimit: 3000,
     searchConfig: {
         facetValueMaxSize: 50,
         collectionMaxSize: 50,
         totalItemsMaxSize: 10000,
         multiMatchType: 'best_fields',
         boostFields: {
-            productName: 1,
-            productVariantName: 1,
+            productName: 5,
+            productVariantName: 5,
             description: 1,
             sku: 1,
         },

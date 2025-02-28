@@ -1,17 +1,14 @@
 import { Injectable } from '@angular/core';
 import { DEFAULT_CHANNEL_CODE } from '@vendure/common/lib/shared-constants';
 import { Observable, of } from 'rxjs';
-import { catchError, map, mapTo, mergeMap, switchMap } from 'rxjs/operators';
+import { catchError, map, mergeMap, switchMap, tap } from 'rxjs/operators';
 
-import {
-    AttemptLogin,
-    CurrentUserChannel,
-    CurrentUserFragment,
-    SetAsLoggedIn,
-} from '../../common/generated-types';
+import { AttemptLoginMutation, CurrentUserFragment } from '../../common/generated-types';
 import { DataService } from '../../data/providers/data.service';
 import { ServerConfigService } from '../../data/server-config';
 import { LocalStorageService } from '../local-storage/local-storage.service';
+import { PermissionsService } from '../permissions/permissions.service';
+import { AlertsService } from '../alerts/alerts.service';
 
 /**
  * This service handles logic relating to authentication of the current user.
@@ -24,13 +21,19 @@ export class AuthService {
         private localStorageService: LocalStorageService,
         private dataService: DataService,
         private serverConfigService: ServerConfigService,
+        private permissionsService: PermissionsService,
+        private alertService: AlertsService,
     ) {}
 
     /**
      * Attempts to log in via the REST login endpoint and updates the app
      * state on success.
      */
-    logIn(username: string, password: string, rememberMe: boolean): Observable<AttemptLogin.Login> {
+    logIn(
+        username: string,
+        password: string,
+        rememberMe: boolean,
+    ): Observable<AttemptLoginMutation['login']> {
         return this.dataService.auth.attemptLogin(username, password, rememberMe).pipe(
             switchMap(response => {
                 if (response.login.__typename === 'CurrentUser') {
@@ -40,10 +43,24 @@ export class AuthService {
             }),
             switchMap(login => {
                 if (login.__typename === 'CurrentUser') {
-                    const { id } = this.getActiveChannel(login.channels);
-                    return this.dataService.client
-                        .loginSuccess(username, id, login.channels)
-                        .pipe(map(() => login));
+                    const activeChannel = this.getActiveChannel(login.channels);
+                    this.permissionsService.setCurrentUserPermissions(activeChannel.permissions);
+                    return this.dataService.administrator.getActiveAdministrator().single$.pipe(
+                        switchMap(({ activeAdministrator }) => {
+                            if (activeAdministrator) {
+                                return this.dataService.client
+                                    .loginSuccess(
+                                        activeAdministrator.id,
+                                        `${activeAdministrator.firstName} ${activeAdministrator.lastName}`,
+                                        activeChannel.id,
+                                        login.channels,
+                                    )
+                                    .pipe(map(() => login));
+                            } else {
+                                return of(login);
+                            }
+                        }),
+                    );
                 }
                 return of(login);
             }),
@@ -64,7 +81,10 @@ export class AuthService {
                     return [];
                 }
             }),
-            mapTo(true),
+            tap(() => {
+                this.alertService.clearAlerts();
+            }),
+            map(() => true),
         );
     }
 
@@ -90,15 +110,31 @@ export class AuthService {
      */
     validateAuthToken(): Observable<boolean> {
         return this.dataService.auth.currentUser().single$.pipe(
-            mergeMap(result => {
-                if (!result.me) {
+            mergeMap(({ me }) => {
+                if (!me) {
                     return of(false) as any;
                 }
-                this.setChannelToken(result.me.channels);
-                const { id } = this.getActiveChannel(result.me.channels);
-                return this.dataService.client.loginSuccess(result.me.identifier, id, result.me.channels);
+                this.setChannelToken(me.channels);
+                const activeChannel = this.getActiveChannel(me.channels);
+                this.permissionsService.setCurrentUserPermissions(activeChannel.permissions);
+                return this.dataService.administrator.getActiveAdministrator().single$.pipe(
+                    switchMap(({ activeAdministrator }) => {
+                        if (activeAdministrator) {
+                            return this.dataService.client
+                                .loginSuccess(
+                                    activeAdministrator.id,
+                                    `${activeAdministrator.firstName} ${activeAdministrator.lastName}`,
+                                    activeChannel.id,
+                                    me.channels,
+                                )
+                                .pipe(map(() => true));
+                        } else {
+                            return of(false);
+                        }
+                    }),
+                );
             }),
-            mapTo(true),
+            map(() => true),
             catchError(err => of(false)),
         );
     }

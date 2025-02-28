@@ -39,7 +39,7 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         this.topics.clear();
     }
 
-    async add<Data extends JobData<Data> = {}>(job: Job<Data>): Promise<Job<Data>> {
+    async add<Data extends JobData<Data> = object>(job: Job<Data>): Promise<Job<Data>> {
         if (!this.hasInitialized) {
             throw new Error('Cannot add job before init');
         }
@@ -57,7 +57,7 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         });
     }
 
-    async start<Data extends JobData<Data> = {}>(
+    async start<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {
@@ -71,8 +71,9 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         }
 
         const subscription = this.subscription(queueName);
-        const listener = (message: Message) => {
-            Logger.debug(`Received message: ${queueName}: ${message.id}`, loggerCtx);
+
+        const processMessage = async (message: Message) => {
+            Logger.verbose(`Received message: ${queueName}: ${message.id}`, loggerCtx);
 
             const job = new Job<Data>({
                 id: message.id,
@@ -84,19 +85,28 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
                 createdAt: message.publishTime,
             });
 
-            process(job)
+            await process(job);
+        };
+
+        const listener = (message: Message) => {
+            processMessage(message)
                 .then(() => {
                     message.ack();
+                    Logger.verbose(`Finished handling: ${queueName}: ${message.id}`, loggerCtx);
                 })
                 .catch(err => {
                     message.nack();
+                    Logger.error(
+                        `Error handling: ${queueName}: ${message.id}: ${String(err.message)}`,
+                        loggerCtx,
+                    );
                 });
         };
         this.listeners.set(queueName, process, listener);
         subscription.on('message', listener);
     }
 
-    async stop<Data extends JobData<Data> = {}>(
+    async stop<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {

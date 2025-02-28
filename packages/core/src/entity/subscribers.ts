@@ -6,6 +6,11 @@ interface EntityPrototype {
     [CALCULATED_PROPERTIES]: CalculatedColumnDefinition[];
 }
 
+/**
+ * @docs Subscribes to events entities to handle calculated decorators
+ *
+ * @docsCategory data-access
+ */
 @EventSubscriber()
 export class CalculatedPropertySubscriber implements EntitySubscriberInterface {
     afterLoad(event: any) {
@@ -30,6 +35,7 @@ export class CalculatedPropertySubscriber implements EntitySubscriberInterface {
                         prototype,
                         calculatedPropertyDef.name,
                     );
+                    // eslint-disable-next-line @typescript-eslint/unbound-method
                     const getFn = getterDescriptor && getterDescriptor.get;
                     if (getFn && !entity.hasOwnProperty(calculatedPropertyDef.name)) {
                         const boundGetFn = getFn.bind(entity);

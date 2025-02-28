@@ -1,8 +1,7 @@
 import { JobState } from '@vendure/common/lib/generated-types';
 import { ID } from '@vendure/common/lib/shared-types';
 import { isObject } from '@vendure/common/lib/shared-utils';
-import { interval, race, Subject, Subscription } from 'rxjs';
-import { fromPromise } from 'rxjs/internal-compatibility';
+import { from, interval, mergeMap, race, Subject, Subscription } from 'rxjs';
 import { filter, switchMap, take, throttleTime } from 'rxjs/operators';
 
 import { Logger } from '../config/logger/vendure-logger';
@@ -52,11 +51,23 @@ export interface PollingJobQueueStrategyConfig {
      * @default () => 1000
      */
     backoffStrategy?: BackoffStrategy;
+    /**
+     * @description
+     * The timeout in ms which the queue will use when attempting a graceful shutdown.
+     * That means, when the server is shut down but a job is running, the job queue will
+     * wait for the job to complete before allowing the server to shut down. If the job
+     * does not complete within this timeout window, the job will be forced to stop
+     * and the server will shut down anyway.
+     *
+     * @since 2.2.0
+     * @default 20_000
+     */
+    gracefulShutdownTimeout?: number;
 }
 
 const STOP_SIGNAL = Symbol('STOP_SIGNAL');
 
-class ActiveQueue<Data extends JobData<Data> = {}> {
+class ActiveQueue<Data extends JobData<Data> = object> {
     private timer: any;
     private running = false;
     private activeJobs: Array<Job<Data>> = [];
@@ -71,10 +82,6 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
         private readonly process: (job: Job<Data>) => Promise<any>,
         private readonly jobQueueStrategy: PollingJobQueueStrategy,
     ) {
-        this.subscription = this.errorNotifier$.pipe(throttleTime(3000)).subscribe(([message, stack]) => {
-            Logger.error(message);
-            Logger.debug(stack);
-        });
         this.pollInterval =
             typeof this.jobQueueStrategy.pollInterval === 'function'
                 ? this.jobQueueStrategy.pollInterval(queueName)
@@ -83,6 +90,10 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
 
     start() {
         Logger.debug(`Starting JobQueue "${this.queueName}"`);
+        this.subscription = this.errorNotifier$.pipe(throttleTime(3000)).subscribe(([message, stack]) => {
+            Logger.error(message);
+            Logger.debug(stack);
+        });
         this.running = true;
         const runNextJobs = async () => {
             try {
@@ -94,15 +105,19 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
                         await this.jobQueueStrategy.update(nextJob);
                         const onProgress = (job: Job) => this.jobQueueStrategy.update(job);
                         nextJob.on('progress', onProgress);
-                        const cancellationSignal$ = interval(this.pollInterval * 5).pipe(
-                            // tslint:disable-next-line:no-non-null-assertion
-                            switchMap(() => this.jobQueueStrategy.findOne(nextJob.id!)),
-                            filter(job => job?.state === JobState.CANCELLED),
-                            take(1),
-                        );
+                        const cancellationSub = interval(this.pollInterval * 5)
+                            .pipe(
+                                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                                switchMap(() => this.jobQueueStrategy.findOne(nextJob.id!)),
+                                filter(job => job?.state === JobState.CANCELLED),
+                                take(1),
+                            )
+                            .subscribe(() => {
+                                nextJob.cancel();
+                            });
                         const stopSignal$ = this.queueStopped$.pipe(take(1));
 
-                        race(fromPromise(this.process(nextJob)), cancellationSignal$, stopSignal$)
+                        race(from(this.process(nextJob)), stopSignal$)
                             .toPromise()
                             .then(
                                 result => {
@@ -119,20 +134,23 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
                                 },
                             )
                             .finally(() => {
-                                if (!this.running && nextJob.state !== JobState.PENDING) {
-                                    return;
-                                }
+                                // if (!this.running && nextJob.state !== JobState.PENDING) {
+                                //     return;
+                                // }
                                 nextJob.off('progress', onProgress);
+                                cancellationSub.unsubscribe();
                                 return this.onFailOrComplete(nextJob);
                             })
-                            .catch(err => {
-                                Logger.warn(`Error updating job info: ${err}`);
+                            .catch((err: any) => {
+                                Logger.warn(`Error updating job info: ${JSON.stringify(err)}`);
                             });
                     }
                 }
-            } catch (e) {
+            } catch (e: any) {
                 this.errorNotifier$.next([
-                    `Job queue "${this.queueName}" encountered an error (set log level to Debug for trace): ${e.message}`,
+                    `Job queue "${
+                        this.queueName
+                    }" encountered an error (set log level to Debug for trace): ${JSON.stringify(e.message)}`,
                     e.stack,
                 ]);
             }
@@ -141,29 +159,60 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
             }
         };
 
-        runNextJobs();
+        void runNextJobs();
     }
 
-    stop(): Promise<void> {
+    async stop(stopActiveQueueTimeout = 20_000): Promise<void> {
         this.running = false;
-        this.queueStopped$.next(STOP_SIGNAL);
         clearTimeout(this.timer);
+        await this.awaitRunningJobsOrTimeout(stopActiveQueueTimeout);
+        Logger.info(`Stopped queue: ${this.queueName}`);
+        this.subscription.unsubscribe();
+        // Allow any job status changes to be persisted
+        // before we permit the application shutdown to continue.
+        // Otherwise, the DB connection will close before our
+        // changes are persisted.
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
 
+    private awaitRunningJobsOrTimeout(stopActiveQueueTimeout = 20_000): Promise<void> {
         const start = +new Date();
-        // Wait for 2 seconds to allow running jobs to complete
-        const maxTimeout = 2000;
-        let pollTimer: any;
+        let timeout: ReturnType<typeof setTimeout>;
         return new Promise(resolve => {
-            const pollActiveJobs = async () => {
-                const timedOut = +new Date() - start > maxTimeout;
-                if (this.activeJobs.length === 0 || timedOut) {
-                    clearTimeout(pollTimer);
+            let lastStatusUpdate = +new Date();
+            const pollActiveJobs = () => {
+                const now = +new Date();
+                const timedOut =
+                    stopActiveQueueTimeout === undefined ? false : now - start > stopActiveQueueTimeout;
+
+                if (this.activeJobs.length === 0) {
+                    clearTimeout(timeout);
                     resolve();
-                } else {
-                    pollTimer = setTimeout(pollActiveJobs, 50);
+                    return;
                 }
+
+                if (timedOut) {
+                    Logger.warn(
+                        `Timed out (${stopActiveQueueTimeout}ms) waiting for ${this.activeJobs.length} active jobs in queue "${this.queueName}" to complete. Forcing stop...`,
+                    );
+                    this.queueStopped$.next(STOP_SIGNAL);
+                    clearTimeout(timeout);
+                    resolve();
+                    return;
+                }
+
+                if (this.activeJobs.length > 0) {
+                    if (now - lastStatusUpdate > 2000) {
+                        Logger.info(
+                            `Stopping queue: ${this.queueName} - waiting for ${this.activeJobs.length} active jobs to complete...`,
+                        );
+                        lastStatusUpdate = now;
+                    }
+                }
+
+                timeout = setTimeout(pollActiveJobs, 200);
             };
-            pollActiveJobs();
+            void pollActiveJobs();
         });
     }
 
@@ -174,7 +223,9 @@ class ActiveQueue<Data extends JobData<Data> = {}> {
 
     private removeJobFromActive(job: Job<Data>) {
         const index = this.activeJobs.indexOf(job);
-        this.activeJobs.splice(index, 1);
+        if (index !== -1) {
+            this.activeJobs.splice(index, 1);
+        }
     }
 }
 
@@ -193,8 +244,9 @@ export abstract class PollingJobQueueStrategy extends InjectableJobQueueStrategy
     public pollInterval: number | ((queueName: string) => number);
     public setRetries: (queueName: string, job: Job) => number;
     public backOffStrategy?: BackoffStrategy;
+    public gracefulShutdownTimeout: number;
 
-    private activeQueues = new QueueNameProcessStorage<ActiveQueue<any>>();
+    protected activeQueues = new QueueNameProcessStorage<ActiveQueue<any>>();
 
     constructor(config?: PollingJobQueueStrategyConfig);
     constructor(concurrency?: number, pollInterval?: number);
@@ -206,14 +258,16 @@ export abstract class PollingJobQueueStrategy extends InjectableJobQueueStrategy
             this.pollInterval = concurrencyOrConfig.pollInterval ?? 200;
             this.backOffStrategy = concurrencyOrConfig.backoffStrategy ?? (() => 1000);
             this.setRetries = concurrencyOrConfig.setRetries ?? ((_, job) => job.retries);
+            this.gracefulShutdownTimeout = concurrencyOrConfig.gracefulShutdownTimeout ?? 20_000;
         } else {
             this.concurrency = concurrencyOrConfig ?? 1;
             this.pollInterval = maybePollInterval ?? 200;
             this.setRetries = (_, job) => job.retries;
+            this.gracefulShutdownTimeout = 20_000;
         }
     }
 
-    async start<Data extends JobData<Data> = {}>(
+    async start<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {
@@ -229,7 +283,7 @@ export abstract class PollingJobQueueStrategy extends InjectableJobQueueStrategy
         this.activeQueues.set(queueName, process, active);
     }
 
-    async stop<Data extends JobData<Data> = {}>(
+    async stop<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {
@@ -237,7 +291,7 @@ export abstract class PollingJobQueueStrategy extends InjectableJobQueueStrategy
         if (!active) {
             return;
         }
-        await active.stop();
+        await active.stop(this.gracefulShutdownTimeout);
     }
 
     async cancelJob(jobId: ID): Promise<Job | undefined> {

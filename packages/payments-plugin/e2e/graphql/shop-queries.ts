@@ -49,11 +49,17 @@ export const TEST_ORDER_FRAGMENT = gql`
                 description
                 type
             }
-            items {
-                id
-                unitPrice
-                unitPriceWithTax
-            }
+        }
+        shippingAddress {
+            fullName
+            company
+            streetLine1
+            streetLine2
+            city
+            province
+            postalCode
+            country
+            phoneNumber
         }
         shippingLines {
             shippingMethod {
@@ -64,6 +70,7 @@ export const TEST_ORDER_FRAGMENT = gql`
         }
         customer {
             id
+            emailAddress
             user {
                 id
                 identifier
@@ -108,17 +115,7 @@ export const SET_SHIPPING_ADDRESS = gql`
     mutation SetShippingAddress($input: CreateAddressInput!) {
         setOrderShippingAddress(input: $input) {
             ... on Order {
-                shippingAddress {
-                    fullName
-                    company
-                    streetLine1
-                    streetLine2
-                    city
-                    province
-                    postalCode
-                    country
-                    phoneNumber
-                }
+                ...TestOrderFragment
             }
             ... on ErrorResult {
                 errorCode
@@ -126,6 +123,7 @@ export const SET_SHIPPING_ADDRESS = gql`
             }
         }
     }
+    ${TEST_ORDER_FRAGMENT}
 `;
 
 export const GET_ELIGIBLE_SHIPPING_METHODS = gql`
@@ -158,7 +156,7 @@ export const TRANSITION_TO_STATE = gql`
 `;
 
 export const SET_SHIPPING_METHOD = gql`
-    mutation SetShippingMethod($id: ID!) {
+    mutation SetShippingMethod($id: [ID!]!) {
         setOrderShippingMethod(shippingMethodId: $id) {
             ...TestOrderFragment
             ... on ErrorResult {
@@ -189,6 +187,28 @@ export const ADD_ITEM_TO_ORDER = gql`
     ${TEST_ORDER_FRAGMENT}
 `;
 
+export const ADJUST_ORDER_LINE = gql`
+    mutation AdjustOrderLine($orderLineId: ID!, $quantity: Int!) {
+        adjustOrderLine(orderLineId: $orderLineId, quantity: $quantity) {
+            ...TestOrderFragment
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+            ... on InsufficientStockError {
+                quantityAvailable
+                order {
+                    ...TestOrderFragment
+                }
+            }
+            ... on OrderInterceptorError {
+                interceptorError
+            }
+        }
+    }
+    ${TEST_ORDER_FRAGMENT}
+`;
+
 export const GET_ORDER_BY_CODE = gql`
     query GetOrderByCode($code: String!) {
         orderByCode(code: $code) {
@@ -202,6 +222,19 @@ export const GET_ACTIVE_ORDER = gql`
     query GetActiveOrder {
         activeOrder {
             ...TestOrderFragment
+        }
+    }
+    ${TEST_ORDER_FRAGMENT}
+`;
+
+export const APPLY_COUPON_CODE = gql`
+    mutation ApplyCouponCode($couponCode: String!) {
+        applyCouponCode(couponCode: $couponCode) {
+            ...TestOrderFragment
+            ... on ErrorResult {
+                errorCode
+                message
+            }
         }
     }
     ${TEST_ORDER_FRAGMENT}

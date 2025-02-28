@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest';
+
 import { OrderState } from '../../service/helpers/order-state-machine/order-state';
 
 import { Transitions } from './types';
@@ -18,7 +20,10 @@ describe('FSM validateTransitionDefinition()', () => {
     it('valid complex definition', () => {
         const orderStateTransitions: Transitions<OrderState> = {
             Created: {
-                to: ['AddingItems'],
+                to: ['AddingItems', 'Draft'],
+            },
+            Draft: {
+                to: ['ArrangingPayment'],
             },
             AddingItems: {
                 to: ['ArrangingPayment', 'Cancelled'],
@@ -69,7 +74,33 @@ describe('FSM validateTransitionDefinition()', () => {
 
         const result = validateTransitionDefinition(valid, 'Start');
 
-        expect(result.valid).toBe(false);
+        expect(result.valid).toBe(true);
         expect(result.error).toBe('The following states are unreachable: Unreachable');
+    });
+
+    it('invalid - non-existent transition', () => {
+        const valid: Transitions<'Start' | 'End' | 'Unreachable'> = {
+            Start: { to: ['End'] },
+            End: { to: ['Bad' as any] },
+            Unreachable: { to: [] },
+        };
+
+        const result = validateTransitionDefinition(valid, 'Start');
+
+        expect(result.valid).toBe(false);
+        expect(result.error).toBe('The state "End" has a transition to an unknown state "Bad"');
+    });
+
+    it('invalid - missing initial state', () => {
+        const valid: Transitions<'Start' | 'End' | 'Unreachable'> = {
+            Start: { to: ['End'] },
+            End: { to: ['Start'] },
+            Unreachable: { to: [] },
+        };
+
+        const result = validateTransitionDefinition(valid, 'Created' as any);
+
+        expect(result.valid).toBe(false);
+        expect(result.error).toBe('The initial state "Created" is not defined');
     });
 });

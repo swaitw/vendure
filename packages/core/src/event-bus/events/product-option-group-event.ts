@@ -8,7 +8,10 @@ import { RequestContext } from '../../api/common/request-context';
 import { ProductOptionGroup } from '../../entity';
 import { VendureEntityEvent } from '../vendure-entity-event';
 
-type ProductOptionGroupInputTypes = CreateProductOptionGroupInput | UpdateProductOptionGroupInput | ID;
+type ProductOptionGroupInputTypes =
+    | Omit<CreateProductOptionGroupInput, 'options'>
+    | UpdateProductOptionGroupInput
+    | ID;
 
 /**
  * @description
@@ -25,7 +28,7 @@ export class ProductOptionGroupEvent extends VendureEntityEvent<
     constructor(
         ctx: RequestContext,
         entity: ProductOptionGroup,
-        type: 'created' | 'updated',
+        type: 'created' | 'updated' | 'deleted',
         input?: ProductOptionGroupInputTypes,
     ) {
         super(entity, type, ctx, input);

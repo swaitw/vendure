@@ -25,4 +25,8 @@ cd ../payments-plugin && npm publish -reg $VERDACCIO &&\
 cd ../testing && npm publish -reg $VERDACCIO &&\
 cd ../ui-devkit && npm publish -reg $VERDACCIO &&\
 cd ../job-queue-plugin && npm publish -reg $VERDACCIO &&\
+cd ../cli && npm publish -reg $VERDACCIO &&\
+cd ../harden-plugin && npm publish -reg $VERDACCIO &&\
+cd ../stellate-plugin && npm publish -reg $VERDACCIO &&\
+cd ../sentry-plugin && npm publish -reg $VERDACCIO &&\
 cd ../admin-ui/package && npm publish -reg $VERDACCIO

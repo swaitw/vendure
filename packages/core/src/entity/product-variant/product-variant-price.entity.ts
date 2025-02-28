@@ -1,8 +1,12 @@
+import { CurrencyCode } from '@vendure/common/lib/generated-types';
 import { DeepPartial, ID } from '@vendure/common/lib/shared-types';
-import { Column, Entity, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, ManyToOne } from 'typeorm';
 
+import { HasCustomFields } from '../../config/custom-field/custom-field-types';
 import { VendureEntity } from '../base/base.entity';
+import { CustomProductVariantPriceFields } from '../custom-entity-fields';
 import { EntityId } from '../entity-id.decorator';
+import { Money } from '../money.decorator';
 
 import { ProductVariant } from './product-variant.entity';
 
@@ -14,15 +18,22 @@ import { ProductVariant } from './product-variant.entity';
  * @docsCategory entities
  */
 @Entity()
-export class ProductVariantPrice extends VendureEntity {
+export class ProductVariantPrice extends VendureEntity implements HasCustomFields {
     constructor(input?: DeepPartial<ProductVariantPrice>) {
         super(input);
     }
 
-    @Column() price: number;
+    @Money() price: number;
 
-    @EntityId() channelId: ID;
+    @EntityId({ nullable: true }) channelId: ID;
 
-    @ManyToOne(type => ProductVariant, variant => variant.productVariantPrices)
+    @Column('varchar')
+    currencyCode: CurrencyCode;
+
+    @Index()
+    @ManyToOne(type => ProductVariant, variant => variant.productVariantPrices, { onDelete: 'CASCADE' })
     variant: ProductVariant;
+
+    @Column(type => CustomProductVariantPriceFields)
+    customFields: CustomProductVariantPriceFields;
 }

@@ -1,7 +1,10 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import {
+    DeletionResponse,
+    DeletionResult,
     MutationCreateProductOptionArgs,
     MutationCreateProductOptionGroupArgs,
+    MutationDeleteProductOptionArgs,
     MutationUpdateProductOptionArgs,
     MutationUpdateProductOptionGroupArgs,
     Permission,
@@ -10,8 +13,8 @@ import {
 } from '@vendure/common/lib/generated-types';
 
 import { Translated } from '../../../common/types/locale-types';
-import { ProductOptionGroup } from '../../../entity/product-option-group/product-option-group.entity';
 import { ProductOption } from '../../../entity/product-option/product-option.entity';
+import { ProductOptionGroup } from '../../../entity/product-option-group/product-option-group.entity';
 import { ProductOptionGroupService } from '../../../service/services/product-option-group.service';
 import { ProductOptionService } from '../../../service/services/product-option.service';
 import { RequestContext } from '../../common/request-context';
@@ -97,5 +100,15 @@ export class ProductOptionResolver {
     ): Promise<Translated<ProductOption>> {
         const { input } = args;
         return this.productOptionService.update(ctx, input);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.DeleteCatalog, Permission.DeleteProduct)
+    async deleteProductOption(
+        @Ctx() ctx: RequestContext,
+        @Args() { id }: MutationDeleteProductOptionArgs,
+    ): Promise<DeletionResponse> {
+        return this.productOptionService.delete(ctx, id);
     }
 }

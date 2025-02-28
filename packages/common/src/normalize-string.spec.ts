@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest';
+
 import { normalizeString } from './normalize-string';
 
 describe('normalizeString()', () => {
@@ -23,7 +25,7 @@ describe('normalizeString()', () => {
     it('strips non-alphanumeric characters', () => {
         expect(normalizeString('hi!!!')).toBe('hi');
         expect(normalizeString('who? me?')).toBe('who me');
-        expect(normalizeString('!"£$%^&*()+[]{};:@#~?/,|\\><`¬\'=')).toBe('');
+        expect(normalizeString('!"£$%^&*()+[]{};:@#~?/,|\\><`¬\'=©®™')).toBe('');
     });
 
     it('allows a subset of non-alphanumeric characters to pass through', () => {
@@ -34,5 +36,21 @@ describe('normalizeString()', () => {
     it('replaces single quotation marks', () => {
         expect(normalizeString('Capture d’écran')).toBe('capture decran');
         expect(normalizeString('Capture d‘écran')).toBe('capture decran');
+    });
+
+    it('replaces eszett with double-s digraph', () => {
+        expect(normalizeString('KONGREẞ im Straßennamen')).toBe('kongress im strassennamen');
+    });
+
+    // works for German language, might not work for e.g. Finnish language
+    it('replaces combining diaeresis with e', () => {
+        expect(normalizeString('Ja quäkt Schwyz Pöbel vor Gmünd')).toBe('ja quaekt schwyz poebel vor gmuend');
+    });
+
+    it('contracts multiple sequential replacers to a single replacer', () => {
+        expect(normalizeString('foo - bar', '-')).toBe('foo-bar');
+        expect(normalizeString('foo--bar', '-')).toBe('foo-bar');
+        expect(normalizeString('foo - bar', '_')).toBe('foo_-_bar');
+        expect(normalizeString('foo _ bar', '_')).toBe('foo_bar');
     });
 });

@@ -1,6 +1,7 @@
+import { LogicalOperator } from '@vendure/common/lib/generated-types';
 import { Type } from '@vendure/common/lib/shared-types';
 import { assertNever } from '@vendure/common/lib/shared-utils';
-import { Connection, ConnectionOptions } from 'typeorm';
+import { DataSource, DataSourceOptions } from 'typeorm';
 import { DateUtils } from 'typeorm/util/DateUtils';
 
 import { InternalServerError, UserInputError } from '../../../common/error/errors';
@@ -18,66 +19,88 @@ import { VendureEntity } from '../../../entity/base/base.entity';
 import { escapeCalculatedColumnExpression, getColumnMetadata } from './connection-utils';
 import { getCalculatedColumns } from './get-calculated-columns';
 
+export interface WhereGroup {
+    operator: LogicalOperator;
+    conditions: Array<WhereCondition | WhereGroup>;
+}
+
 export interface WhereCondition {
     clause: string;
-    parameters: { [param: string]: string | number };
+    parameters: { [param: string]: string | number | string[] };
 }
 
 type AllOperators = StringOperators & BooleanOperators & NumberOperators & DateOperators & ListOperators;
 type Operator = { [K in keyof AllOperators]-?: K }[keyof AllOperators];
 
-export function parseFilterParams<T extends VendureEntity>(
-    connection: Connection,
+export function parseFilterParams<
+    T extends VendureEntity,
+    FP extends NullOptionals<FilterParameter<T>>,
+    R extends FP extends { _and: Array<FilterParameter<T>> }
+        ? WhereGroup[]
+        : FP extends { _or: Array<FilterParameter<T>> }
+          ? WhereGroup[]
+          : WhereCondition[],
+>(
+    connection: DataSource,
     entity: Type<T>,
-    filterParams?: NullOptionals<FilterParameter<T>> | null,
+    filterParams?: FP | null,
     customPropertyMap?: { [name: string]: string },
     entityAlias?: string,
-): WhereCondition[] {
+): R {
     if (!filterParams) {
-        return [];
+        return [] as unknown as R;
     }
     const { columns, translationColumns, alias: defaultAlias } = getColumnMetadata(connection, entity);
     const alias = entityAlias ?? defaultAlias;
     const calculatedColumns = getCalculatedColumns(entity);
-    const output: WhereCondition[] = [];
+
     const dbType = connection.options.type;
     let argIndex = 1;
-    for (const [key, operation] of Object.entries(filterParams)) {
-        if (operation) {
-            const calculatedColumnDef = calculatedColumns.find(c => c.name === key);
-            const instruction = calculatedColumnDef?.listQuery;
-            const calculatedColumnExpression = instruction?.expression;
-            for (const [operator, operand] of Object.entries(operation as object)) {
-                let fieldName: string;
-                if (columns.find(c => c.propertyName === key)) {
-                    fieldName = `${alias}.${key}`;
-                } else if (translationColumns.find(c => c.propertyName === key)) {
-                    const translationsAlias = connection.namingStrategy.eagerJoinRelationAlias(
-                        alias,
-                        'translations',
-                    );
-                    fieldName = `${translationsAlias}.${key}`;
-                } else if (calculatedColumnExpression) {
-                    fieldName = escapeCalculatedColumnExpression(connection, calculatedColumnExpression);
-                } else if (customPropertyMap?.[key]) {
-                    fieldName = customPropertyMap[key];
-                } else {
-                    throw new UserInputError('error.invalid-filter-field');
-                }
-                const condition = buildWhereCondition(
-                    fieldName,
-                    operator as Operator,
-                    operand,
-                    argIndex,
-                    dbType,
-                );
-                output.push(condition);
-                argIndex++;
+
+    function buildConditionsForField(key: string, operation: FilterParameter<T>): WhereCondition[] {
+        const output: WhereCondition[] = [];
+        const calculatedColumnDef = calculatedColumns.find(c => c.name === key);
+        const instruction = calculatedColumnDef?.listQuery;
+        const calculatedColumnExpression = instruction?.expression;
+        for (const [operator, operand] of Object.entries(operation as object)) {
+            let fieldName: string;
+            if (columns.find(c => c.propertyName === key)) {
+                fieldName = `${alias}.${key}`;
+            } else if (translationColumns.find(c => c.propertyName === key)) {
+                const translationsAlias = [alias, 'translations'].join('__');
+                fieldName = `${translationsAlias}.${key}`;
+            } else if (calculatedColumnExpression) {
+                fieldName = escapeCalculatedColumnExpression(connection, calculatedColumnExpression);
+            } else if (customPropertyMap?.[key]) {
+                fieldName = customPropertyMap[key];
+            } else {
+                throw new UserInputError('error.invalid-filter-field');
             }
+            const condition = buildWhereCondition(fieldName, operator as Operator, operand, argIndex, dbType);
+            output.push(condition);
+            argIndex++;
         }
+        return output;
     }
 
-    return output;
+    function processFilterParameter(param: FilterParameter<T>) {
+        const result: Array<WhereCondition | WhereGroup> = [];
+        for (const [key, operation] of Object.entries(param)) {
+            if (key === '_and' || key === '_or') {
+                result.push({
+                    operator: key === '_and' ? LogicalOperator.AND : LogicalOperator.OR,
+                    conditions: operation.map(o => processFilterParameter(o)).flat(),
+                });
+            } else if (operation && !Array.isArray(operation)) {
+                result.push(...buildConditionsForField(key, operation));
+            }
+        }
+        return result;
+    }
+
+    const conditions = processFilterParameter(filterParams as FilterParameter<T>);
+
+    return conditions as R;
 }
 
 function buildWhereCondition(
@@ -85,7 +108,7 @@ function buildWhereCondition(
     operator: Operator,
     operand: any,
     argIndex: number,
-    dbType: ConnectionOptions['type'],
+    dbType: DataSourceOptions['type'],
 ): WhereCondition {
     switch (operator) {
         case 'eq':
@@ -104,6 +127,7 @@ function buildWhereCondition(
             return {
                 clause: `${fieldName} ${LIKE} :arg${argIndex}`,
                 parameters: {
+                    // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
                     [`arg${argIndex}`]: `%${typeof operand === 'string' ? operand.trim() : operand}%`,
                 },
             };
@@ -112,19 +136,38 @@ function buildWhereCondition(
             const LIKE = dbType === 'postgres' ? 'ILIKE' : 'LIKE';
             return {
                 clause: `${fieldName} NOT ${LIKE} :arg${argIndex}`,
+                // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
                 parameters: { [`arg${argIndex}`]: `%${operand.trim()}%` },
             };
         }
-        case 'in':
-            return {
-                clause: `${fieldName} IN (:...arg${argIndex})`,
-                parameters: { [`arg${argIndex}`]: operand },
-            };
-        case 'notIn':
-            return {
-                clause: `${fieldName} NOT IN (:...arg${argIndex})`,
-                parameters: { [`arg${argIndex}`]: operand },
-            };
+        case 'in': {
+            if (Array.isArray(operand) && operand.length) {
+                return {
+                    clause: `${fieldName} IN (:...arg${argIndex})`,
+                    parameters: { [`arg${argIndex}`]: operand },
+                };
+            } else {
+                // "in" with an empty set should always return nothing
+                return {
+                    clause: '1 = 0',
+                    parameters: {},
+                };
+            }
+        }
+        case 'notIn': {
+            if (Array.isArray(operand) && operand.length) {
+                return {
+                    clause: `${fieldName} NOT IN (:...arg${argIndex})`,
+                    parameters: { [`arg${argIndex}`]: operand },
+                };
+            } else {
+                // "notIn" with an empty set should always return all
+                return {
+                    clause: '1 = 1',
+                    parameters: {},
+                };
+            }
+        }
         case 'regex':
             return {
                 clause: getRegexpClause(fieldName, argIndex, dbType),
@@ -160,6 +203,11 @@ function buildWhereCondition(
                     [`arg${argIndex}_b`]: convertDate(operand.end),
                 },
             };
+        case 'isNull':
+            return {
+                clause: operand === true ? `${fieldName} IS NULL` : `${fieldName} IS NOT NULL`,
+                parameters: {},
+            };
         default:
             assertNever(operator);
     }
@@ -183,16 +231,16 @@ function convertDate(input: Date | string | number): string | number {
 /**
  * Returns a valid regexp clause based on the current DB driver type.
  */
-function getRegexpClause(fieldName: string, argIndex: number, dbType: ConnectionOptions['type']): string {
+function getRegexpClause(fieldName: string, argIndex: number, dbType: DataSourceOptions['type']): string {
     switch (dbType) {
         case 'mariadb':
         case 'mysql':
         case 'sqljs':
         case 'better-sqlite3':
-        case 'aurora-data-api':
+        case 'aurora-mysql':
             return `${fieldName} REGEXP :arg${argIndex}`;
         case 'postgres':
-        case 'aurora-data-api-pg':
+        case 'aurora-postgres':
         case 'cockroachdb':
             return `${fieldName} ~* :arg${argIndex}`;
         // The node-sqlite3 driver does not support user-defined functions

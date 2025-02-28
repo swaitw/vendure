@@ -15,6 +15,7 @@ import {
     ProductVariantChannelEvent,
     ProductVariantEvent,
     SearchJobBufferService,
+    StockMovementEvent,
     TaxRateModificationEvent,
     Type,
     VendurePlugin,
@@ -65,7 +66,9 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  * ## Installation
  *
  * **Requires Elasticsearch v7.0 < required Elasticsearch version < 7.10 **
- * Elasticsearch version 7.10.2 will throw error due to incompatibility with elasticsearch-js client. [Check here for more info](https://github.com/elastic/elasticsearch-js/issues/1519)
+ * Elasticsearch version 7.10.2 will throw error due to incompatibility with elasticsearch-js client.
+ * [Check here for more info](https://github.com/elastic/elasticsearch-js/issues/1519).
+ *
  * `yarn add \@elastic/elasticsearch \@vendure/elasticsearch-plugin`
  *
  * or
@@ -94,9 +97,9 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  * ## Search API Extensions
  * This plugin extends the default search query of the Shop API, allowing richer querying of your product data.
  *
- * The [SearchResponse](/docs/graphql-api/admin/object-types/#searchresponse) type is extended with information
+ * The [SearchResponse](/reference/graphql-api/shop/object-types/#searchresponse) type is extended with information
  * about price ranges in the result set:
- * ```SDL
+ * ```graphql
  * extend type SearchResponse {
  *     prices: SearchResponsePriceData!
  * }
@@ -116,6 +119,7 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  * extend input SearchInput {
  *     priceRange: PriceRangeInput
  *     priceRangeWithTax: PriceRangeInput
+ *     inStock: Boolean
  * }
  *
  * input PriceRangeInput {
@@ -128,7 +132,7 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  *
  * ## Example Request & Response
  *
- * ```SDL
+ * ```graphql
  * {
  *   search (input: {
  *     term: "table easel"
@@ -163,7 +167,7 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  * }
  * ```
  *
- * ```JSON
+ * ```json
  *{
  *  "data": {
  *    "search": {
@@ -216,7 +220,7 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
  *}
  * ```
  *
- * @docsCategory ElasticsearchPlugin
+ * @docsCategory core plugins/ElasticsearchPlugin
  */
 @VendurePlugin({
     imports: [PluginCommonModule],
@@ -250,6 +254,7 @@ function getCustomResolvers(options: ElasticsearchRuntimeOptions) {
         // which looks like possibly a TS/definitions bug.
         schema: () => generateSchemaExtensions(ElasticsearchPlugin.options as any),
     },
+    compatibility: '^3.0.0',
 })
 export class ElasticsearchPlugin implements OnApplicationBootstrap {
     private static options: ElasticsearchRuntimeOptions;
@@ -276,7 +281,7 @@ export class ElasticsearchPlugin implements OnApplicationBootstrap {
         const nodeName = this.nodeName();
         try {
             await this.elasticsearchService.checkConnection();
-        } catch (e) {
+        } catch (e: any) {
             Logger.error(`Could not connect to Elasticsearch instance at "${nodeName}"`, loggerCtx);
             Logger.error(JSON.stringify(e), loggerCtx);
             this.healthCheckRegistryService.registerIndicatorFunction(() =>
@@ -344,6 +349,13 @@ export class ElasticsearchPlugin implements OnApplicationBootstrap {
                     event.channelId,
                 );
             }
+        });
+
+        this.eventBus.ofType(StockMovementEvent).subscribe(event => {
+            return this.elasticsearchIndexService.updateVariants(
+                event.ctx,
+                event.stockMovements.map(m => m.productVariant),
+            );
         });
 
         // TODO: Remove this buffering logic because because we have dedicated buffering based on #1137

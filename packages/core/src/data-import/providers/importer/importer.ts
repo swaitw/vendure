@@ -10,8 +10,9 @@ import { RequestContext } from '../../../api/common/request-context';
 import { InternalServerError } from '../../../common/error/errors';
 import { ConfigService } from '../../../config/config.service';
 import { CustomFieldConfig } from '../../../config/custom-field/custom-field-types';
-import { FacetValue } from '../../../entity/facet-value/facet-value.entity';
+import { Logger } from '../../../config/index';
 import { Facet } from '../../../entity/facet/facet.entity';
+import { FacetValue } from '../../../entity/facet-value/facet-value.entity';
 import { TaxCategory } from '../../../entity/tax-category/tax-category.entity';
 import { ChannelService } from '../../../service/services/channel.service';
 import { FacetValueService } from '../../../service/services/facet-value.service';
@@ -60,7 +61,7 @@ export class Importer {
 
     /**
      * @description
-     * Parses the contents of the [product import CSV file](/docs/developer-guide/importing-product-data/#product-import-format) and imports
+     * Parses the contents of the [product import CSV file](/guides/developer-guide/importing-data/#product-import-format) and imports
      * the resulting Product & ProductVariants, as well as any associated Assets, Facets & FacetValues.
      *
      * The `ctxOrLanguageCode` argument is used to specify the languageCode to be used when creating the Products.
@@ -113,7 +114,7 @@ export class Importer {
                     imported: parsed.results.length,
                     processed: parsed.processed,
                 };
-            } catch (err) {
+            } catch (err: any) {
                 return {
                     errors: [err.message],
                     imported: 0,
@@ -159,6 +160,17 @@ export class Importer {
         let imported = 0;
         const languageCode = ctx.languageCode;
         const taxCategories = await this.taxCategoryService.findAll(ctx);
+        if (taxCategories.totalItems === 0) {
+            Logger.error(
+                [
+                    `No TaxCategories found in the database. Ensure that at least one TaxCategory exists.`,
+                    `If you are populating from an InitialData object, ensure the 'taxRates' array is not empty.`,
+                ].join('\n'),
+            );
+            throw new Error(
+                `No TaxCategories found in the database. Ensure the IntialData.taxRates array is not empty.`,
+            );
+        }
         await this.fastImporter.initialize(ctx.channel);
         for (const { product, variants } of rows) {
             const productMainTranslation = this.getTranslationByCodeOrFirst(
@@ -207,7 +219,7 @@ export class Importer {
                 );
                 const groupId = await this.fastImporter.createProductOptionGroup({
                     code,
-                    options: optionGroupMainTranslation.values.map(name => ({} as any)),
+                    options: optionGroupMainTranslation.values.map(name => ({}) as any),
                     translations: optionGroup.translations.map(translation => {
                         return {
                             languageCode: translation.languageCode,
@@ -260,7 +272,7 @@ export class Importer {
                     featuredAssetId: variantAssets.length ? variantAssets[0].id : undefined,
                     assetIds: variantAssets.map(a => a.id),
                     sku: variant.sku,
-                    taxCategoryId: this.getMatchingTaxCategoryId(variant.taxCategory, taxCategories),
+                    taxCategoryId: this.getMatchingTaxCategoryId(variant.taxCategory, taxCategories.items),
                     stockOnHand: variant.stockOnHand,
                     trackInventory: variant.trackInventory,
                     optionIds,
@@ -297,7 +309,7 @@ export class Importer {
         return errors;
     }
 
-    private async getFacetValueIds(
+    protected async getFacetValueIds(
         ctx: RequestContext,
         facets: ParsedFacet[],
         languageCode: LanguageCode,
@@ -363,12 +375,17 @@ export class Importer {
         return facetValueIds;
     }
 
-    private processCustomFieldValues(customFields: { [field: string]: string }, config: CustomFieldConfig[]) {
-        const processed: { [field: string]: string | string[] | undefined } = {};
+    protected processCustomFieldValues(
+        customFields: { [field: string]: string },
+        config: CustomFieldConfig[],
+    ) {
+        const processed: { [field: string]: string | string[] | boolean | undefined } = {};
         for (const fieldDef of config) {
             const value = customFields[fieldDef.name];
             if (fieldDef.list === true) {
                 processed[fieldDef.name] = value?.split('|').filter(val => val.trim() !== '');
+            } else if (fieldDef.type === 'boolean') {
+                processed[fieldDef.name] = value ? value.toLowerCase() === 'true' : undefined;
             } else {
                 processed[fieldDef.name] = value ? value : undefined;
             }

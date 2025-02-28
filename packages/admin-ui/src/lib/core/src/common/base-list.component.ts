@@ -1,83 +1,56 @@
-import { Directive, OnDestroy, OnInit } from '@angular/core';
+import { DestroyRef, Directive, inject, OnDestroy, OnInit } from '@angular/core';
+import { FormControl } from '@angular/forms';
 import { ActivatedRoute, QueryParamsHandling, Router } from '@angular/router';
-import { BehaviorSubject, combineLatest, Observable, Subject } from 'rxjs';
-import { distinctUntilChanged, map, shareReplay, takeUntil } from 'rxjs/operators';
+import { ResultOf, TypedDocumentNode, VariablesOf } from '@graphql-typed-document-node/core';
+import { BehaviorSubject, combineLatest, merge, Observable, Subject, switchMap } from 'rxjs';
+import { debounceTime, distinctUntilChanged, filter, map, shareReplay, takeUntil, tap } from 'rxjs/operators';
+import { DataService } from '../data/providers/data.service';
 
 import { QueryResult } from '../data/query-result';
+import { ServerConfigService } from '../data/server-config';
+import { DataTableConfigService } from '../providers/data-table/data-table-config.service';
+import { DataTableFilterCollection } from '../providers/data-table/data-table-filter-collection';
+import { DataTableSortCollection } from '../providers/data-table/data-table-sort-collection';
+import { PermissionsService } from '../providers/permissions/permissions.service';
+import { DataTable2ColumnComponent } from '../shared/components/data-table-2/data-table-column.component';
+import { DataTableCustomFieldColumnComponent } from '../shared/components/data-table-2/data-table-custom-field-column.component';
+import { CustomFieldConfig, CustomFields, LanguageCode } from './generated-types';
+import { SelectionManager } from './utilities/selection-manager';
 
 export type ListQueryFn<R> = (take: number, skip: number, ...args: any[]) => QueryResult<R, any>;
 export type MappingFn<T, R> = (result: R) => { items: T[]; totalItems: number };
 export type OnPageChangeFn<V> = (skip: number, take: number) => V;
 
 /**
+ * Unwraps a query that returns a paginated list with an "items" property,
+ * returning the type of one of the items in the array.
+ */
+export type ItemOf<T, K extends keyof T> = T[K] extends { items: infer R }
+    ? R extends any[]
+        ? R[number]
+        : R
+    : never;
+
+/**
  * @description
  * This is a base class which implements the logic required to fetch and manipulate
  * a list of data from a query which returns a PaginatedList type.
  *
- * @example
- * ```TypeScript
- * \@Component({
- *   selector: 'my-entity-list',
- *   templateUrl: './my-entity-list.component.html',
- *   styleUrls: ['./my-entity-list.component.scss'],
- *   changeDetection: ChangeDetectionStrategy.OnPush,
- * })
- * export class MyEntityListComponent extends BaseListComponent<GetMyEntityList.Query, GetMyEntityList.Items> {
- *   constructor(
- *     private dataService: DataService,
- *     router: Router,
- *     route: ActivatedRoute,
- *   ) {
- *     super(router, route);
- *     super.setQueryFn(
- *       (...args: any[]) => this.dataService.query<GetMyEntityList.Query>(GET_MY_ENTITY_LIST),
- *       data => data.myEntities,
- *     );
- *   }
- * }
- * ```
- *
- * The template for the component will typically use the {@link DataTableComponent} to display the results.
- *
- * @example
- * ```HTML
- * <vdr-action-bar>
- *   <vdr-ab-right>
- *     <a class="btn btn-primary" [routerLink]="['./create']" *vdrIfPermissions="['CreateSettings', 'CreateTaxRate']">
- *       <clr-icon shape="plus"></clr-icon>
- *       Create new my entity
- *     </a>
- *   </vdr-ab-right>
- * </vdr-action-bar>
- *
- * <vdr-data-table
- *   [items]="items$ | async"
- *   [itemsPerPage]="itemsPerPage$ | async"
- *   [totalItems]="totalItems$ | async"
- *   [currentPage]="currentPage$ | async"
- *   (pageChange)="setPageNumber($event)"
- *   (itemsPerPageChange)="setItemsPerPage($event)"
- * >
- *   <vdr-dt-column>{{ 'common.name' | translate }}</vdr-dt-column>
- *   <vdr-dt-column></vdr-dt-column>
- *   <ng-template let-myEntity="item">
- *     <td class="left align-middle">{{ myEntity.name }}</td>
- *     <td class="right align-middle">
- *       <vdr-table-row-action
- *         iconShape="edit"
- *         [label]="'common.edit' | translate"
- *         [linkTo]="['./', myEntity.id]"
- *       ></vdr-table-row-action>
- *     </td>
- *   </ng-template>
- * </vdr-data-table>
- * ```
+ * It is normally used in combination with the {@link DataTable2Component}.
  *
  * @docsCategory list-detail-views
  */
 @Directive()
-// tslint:disable-next-line:directive-class-suffix
-export class BaseListComponent<ResultType, ItemType, VariableType = any> implements OnInit, OnDestroy {
+// eslint-disable-next-line @angular-eslint/directive-class-suffix
+export class BaseListComponent<ResultType, ItemType, VariableType extends Record<string, any> = any>
+    implements OnInit, OnDestroy
+{
+    searchTermControl = new FormControl('');
+    selectionManager = new SelectionManager<any>({
+        multiSelect: true,
+        itemsAreEqual: (a, b) => a.id === b.id,
+        additiveMode: true,
+    });
     result$: Observable<ResultType>;
     items$: Observable<ItemType[]>;
     totalItems$: Observable<number>;
@@ -88,11 +61,17 @@ export class BaseListComponent<ResultType, ItemType, VariableType = any> impleme
     private listQueryFn: ListQueryFn<ResultType>;
     private mappingFn: MappingFn<ItemType, ResultType>;
     private onPageChangeFn: OnPageChangeFn<VariableType> = (skip, take) =>
-        ({ options: { skip, take } } as any);
-    private refresh$ = new BehaviorSubject<undefined>(undefined);
+        ({ options: { skip, take } }) as any;
+    protected refresh$ = new BehaviorSubject<undefined>(undefined);
     private defaults: { take: number; skip: number } = { take: 10, skip: 0 };
+    protected visibleCustomFieldColumnChange$ = new Subject<
+        Array<DataTableCustomFieldColumnComponent<any>>
+    >();
 
-    constructor(protected router: Router, protected route: ActivatedRoute) {}
+    constructor(
+        protected router: Router,
+        protected route: ActivatedRoute,
+    ) {}
 
     /**
      * @description
@@ -126,7 +105,7 @@ export class BaseListComponent<ResultType, ItemType, VariableType = any> impleme
         const fetchPage = ([currentPage, itemsPerPage, _]: [number, number, undefined]) => {
             const take = itemsPerPage;
             const skip = (currentPage - 1) * itemsPerPage;
-            this.listQuery.ref.refetch(this.onPageChangeFn(skip, take));
+            this.listQuery.ref?.refetch(this.onPageChangeFn(skip, take));
         };
 
         this.result$ = this.listQuery.stream$.pipe(shareReplay(1));
@@ -148,11 +127,27 @@ export class BaseListComponent<ResultType, ItemType, VariableType = any> impleme
             .subscribe(fetchPage);
     }
 
+    /**
+     * @description
+     * Accepts a list of Observables which will trigger a refresh of the list when any of them emit.
+     */
+    protected refreshListOnChanges(...streams: Array<Observable<any>>) {
+        const searchTerm$ = this.searchTermControl.valueChanges.pipe(
+            filter(value => value !== null && (2 < value.length || value.length === 0)),
+            debounceTime(250),
+            tap(() => this.setPageNumber(1)),
+        );
+
+        merge(searchTerm$, ...streams)
+            .pipe(takeUntil(this.destroy$))
+            .subscribe(() => this.refresh$.next(undefined));
+    }
+
     /** @internal */
     ngOnDestroy() {
         this.destroy$.next();
         this.destroy$.complete();
-        this.listQuery.completed$.next();
+        this.listQuery.destroy();
     }
 
     /**
@@ -169,6 +164,15 @@ export class BaseListComponent<ResultType, ItemType, VariableType = any> impleme
      */
     setItemsPerPage(perPage: number) {
         this.setQueryParam('perPage', perPage, { replaceUrl: true });
+    }
+
+    setVisibleColumns(columns: Array<DataTable2ColumnComponent<any>>) {
+        this.visibleCustomFieldColumnChange$.next(
+            columns.filter(
+                (c): c is DataTableCustomFieldColumnComponent<any> =>
+                    c instanceof DataTableCustomFieldColumnComponent,
+            ),
+        );
     }
 
     /**
@@ -193,13 +197,118 @@ export class BaseListComponent<ResultType, ItemType, VariableType = any> impleme
         valueOrOptions?: any,
         maybeOptions?: { replaceUrl?: boolean; queryParamsHandling?: QueryParamsHandling },
     ) {
-        const paramsObject = typeof keyOrHash === 'string' ? { [keyOrHash]: valueOrOptions } : keyOrHash;
         const options = (typeof keyOrHash === 'string' ? maybeOptions : valueOrOptions) ?? {};
         this.router.navigate(['./'], {
             queryParams: typeof keyOrHash === 'string' ? { [keyOrHash]: valueOrOptions } : keyOrHash,
             relativeTo: this.route,
             queryParamsHandling: 'merge',
             ...options,
+        });
+    }
+}
+
+/**
+ * @description
+ * A version of the {@link BaseListComponent} which is designed to be used with a
+ * [TypedDocumentNode](https://the-guild.dev/graphql/codegen/plugins/typescript/typed-document-node).
+ *
+ * @docsCategory list-detail-views
+ */
+@Directive()
+export class TypedBaseListComponent<
+        T extends TypedDocumentNode<any, Vars>,
+        Field extends keyof ResultOf<T>,
+        Vars extends { options: { filter: any; sort: any } } = VariablesOf<T>,
+    >
+    extends BaseListComponent<ResultOf<T>, ItemOf<ResultOf<T>, Field>, VariablesOf<T>>
+    implements OnInit
+{
+    availableLanguages$: Observable<LanguageCode[]>;
+    contentLanguage$: Observable<LanguageCode>;
+
+    protected dataService = inject(DataService);
+    protected router = inject(Router);
+    protected serverConfigService = inject(ServerConfigService);
+    protected permissionsService = inject(PermissionsService);
+    protected dataTableConfigService = inject(DataTableConfigService);
+    /**
+     * This was introduced to allow us to more easily manage the relation between the
+     * DataTableComponent and the BaseListComponent. It allows the base class to
+     * correctly look up the currently-visible custom field columns, which can then
+     * be passed to the `dataService.query()` method.
+     */
+    protected dataTableListId: string | undefined;
+    private refreshStreams: Array<Observable<any>> = [];
+    private collections: Array<DataTableFilterCollection | DataTableSortCollection<any>> = [];
+
+    constructor() {
+        super(inject(Router), inject(ActivatedRoute));
+
+        const destroyRef = inject(DestroyRef);
+        destroyRef.onDestroy(() => {
+            this.collections.forEach(c => c.destroy());
+        });
+    }
+
+    protected configure(config: {
+        document: T;
+        getItems: (data: ResultOf<T>) => { items: Array<ItemOf<ResultOf<T>, Field>>; totalItems: number };
+        setVariables?: (skip: number, take: number) => VariablesOf<T>;
+        refreshListOnChanges?: Array<Observable<any>>;
+    }) {
+        const customFieldsChange$ = this.visibleCustomFieldColumnChange$.pipe(
+            map(columns => columns.map(c => c.customField.name)),
+            distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+        );
+        const includeCustomFields = this.dataTableListId
+            ? this.dataTableConfigService.getConfig(this.dataTableListId).visibility
+            : undefined;
+        super.setQueryFn(
+            (args: any) =>
+                this.dataService
+                    .query(config.document, {} as any, 'cache-and-network', {
+                        includeCustomFields,
+                    })
+                    .refetchOnChannelChange()
+                    .refetchOnCustomFieldsChange(customFieldsChange$),
+            data => config.getItems(data),
+            (skip, take) => config.setVariables?.(skip, take) ?? ({} as any),
+        );
+        this.availableLanguages$ = this.serverConfigService.getAvailableLanguages();
+        this.contentLanguage$ = this.dataService.client
+            .uiState()
+            .mapStream(({ uiState }) => uiState.contentLanguage)
+            .pipe(tap(() => this.refresh()));
+        this.refreshStreams = config.refreshListOnChanges ?? [];
+    }
+
+    ngOnInit() {
+        super.ngOnInit();
+        super.refreshListOnChanges(this.contentLanguage$, ...this.refreshStreams);
+    }
+
+    createFilterCollection(): DataTableFilterCollection<NonNullable<NonNullable<Vars['options']>['filter']>> {
+        const collection = new DataTableFilterCollection<NonNullable<Vars['options']['filter']>>(this.router);
+        this.collections.push(collection);
+        return collection;
+    }
+
+    createSortCollection(): DataTableSortCollection<NonNullable<NonNullable<Vars['options']>['sort']>> {
+        const collection = new DataTableSortCollection<NonNullable<Vars['options']['sort']>>(this.router);
+        this.collections.push(collection);
+        return collection;
+    }
+
+    setLanguage(code: LanguageCode) {
+        this.dataService.client.setContentLanguage(code).subscribe();
+    }
+
+    getCustomFieldConfig(key: Exclude<keyof CustomFields, '__typename'> | string): CustomFieldConfig[] {
+        return this.serverConfigService.getCustomFieldsFor(key).filter(f => {
+            if (f.requiresPermission?.length) {
+                return this.permissionsService.userHasPermissions(f.requiresPermission);
+            }
+            return true;
         });
     }
 }

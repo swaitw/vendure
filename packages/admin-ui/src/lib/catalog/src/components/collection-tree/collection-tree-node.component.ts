@@ -1,21 +1,24 @@
 import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop';
 import {
     ChangeDetectionStrategy,
+    ChangeDetectorRef,
     Component,
     Input,
     OnChanges,
+    OnDestroy,
     OnInit,
     Optional,
     SimpleChanges,
     SkipSelf,
 } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { DataService, Permission } from '@vendure/admin-ui/core';
-import { Observable } from 'rxjs';
+import { DataService, Permission, SelectionManager } from '@vendure/admin-ui/core';
+import { Observable, Subscription } from 'rxjs';
 import { map, shareReplay } from 'rxjs/operators';
 
 import { RootNode, TreeNode } from './array-to-tree';
-import { CollectionPartial, CollectionTreeComponent } from './collection-tree.component';
+import { CollectionTreeService } from './collection-tree.service';
+import { CollectionPartial } from './collection-tree.types';
 
 @Component({
     selector: 'vdr-collection-tree-node',
@@ -23,22 +26,25 @@ import { CollectionPartial, CollectionTreeComponent } from './collection-tree.co
     styleUrls: ['./collection-tree-node.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class CollectionTreeNodeComponent implements OnInit, OnChanges {
+export class CollectionTreeNodeComponent implements OnInit, OnChanges, OnDestroy {
     depth = 0;
     parentName: string;
     @Input() collectionTree: TreeNode<CollectionPartial>;
     @Input() activeCollectionId: string;
     @Input() expandAll = false;
+    @Input() selectionManager: SelectionManager<CollectionPartial>;
     hasUpdatePermission$: Observable<boolean>;
     hasDeletePermission$: Observable<boolean>;
     moveListItems: Array<{ path: string; id: string }> = [];
+    private subscription: Subscription;
 
     constructor(
         @SkipSelf() @Optional() private parent: CollectionTreeNodeComponent,
-        private root: CollectionTreeComponent,
         private dataService: DataService,
+        private collectionTreeService: CollectionTreeService,
         private router: Router,
         private route: ActivatedRoute,
+        private changeDetectorRef: ChangeDetectorRef,
     ) {
         if (parent) {
             this.depth = parent.depth + 1;
@@ -63,6 +69,9 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
                     perms.includes(Permission.DeleteCatalog) || perms.includes(Permission.DeleteCollection),
             ),
         );
+        this.subscription = this.selectionManager?.selectionChanges$.subscribe(() =>
+            this.changeDetectorRef.markForCheck(),
+        );
     }
 
     ngOnChanges(changes: SimpleChanges) {
@@ -72,6 +81,10 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
                 this.collectionTree.children.forEach(c => (c.expanded = false));
             }
         }
+    }
+
+    ngOnDestroy() {
+        this.subscription?.unsubscribe();
     }
 
     trackByFn(index: number, item: CollectionPartial) {
@@ -96,11 +109,11 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
     }
 
     getMoveListItems(collection: CollectionPartial) {
-        this.moveListItems = this.root.getMoveListItems(collection);
+        this.moveListItems = this.collectionTreeService.getMoveListItems(collection);
     }
 
     move(collection: CollectionPartial, parentId: string) {
-        this.root.onMove({
+        this.collectionTreeService.onMove({
             index: 0,
             parentId,
             collectionId: collection.id,
@@ -111,7 +124,7 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
         if (!collection.parent) {
             return;
         }
-        this.root.onMove({
+        this.collectionTreeService.onMove({
             index: currentIndex - 1,
             parentId: collection.parent.id,
             collectionId: collection.id,
@@ -122,7 +135,7 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
         if (!collection.parent) {
             return;
         }
-        this.root.onMove({
+        this.collectionTreeService.onMove({
             index: currentIndex + 1,
             parentId: collection.parent.id,
             collectionId: collection.id,
@@ -131,10 +144,10 @@ export class CollectionTreeNodeComponent implements OnInit, OnChanges {
 
     drop(event: CdkDragDrop<CollectionPartial | RootNode<CollectionPartial>>) {
         moveItemInArray(this.collectionTree.children, event.previousIndex, event.currentIndex);
-        this.root.onDrop(event);
+        this.collectionTreeService.onDrop(event);
     }
 
     delete(id: string) {
-        this.root.onDelete(id);
+        this.collectionTreeService.onDelete(id);
     }
 }

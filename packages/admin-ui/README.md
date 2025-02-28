@@ -4,13 +4,13 @@ This is the administration interface for Vendure.
 
 It is an Angular application built with the Angular CLI.
 
-The UI is powered by the [Clarity Design System](https://vmware.github.io/clarity/).
+The UI is powered by the [Clarity Design System](https://clarity.design).
 
 ## Structure
 
 ### Library
 
-The Admin UI is structured as an Angular library conforming to the [ng-packagr format](https://github.com/ng-packagr/ng-packagr). This library is what is published to npm as `@vendure/admin-ui`. The libary consists
+The Admin UI is structured as an Angular library conforming to the [ng-packagr format](https://github.com/ng-packagr/ng-packagr). This library is what is published to npm as `@vendure/admin-ui`. The library consists
 of a set of modules which are accessible from consuming applications as sub-packages:
 
 * `@vendure/admin-ui/core`
@@ -19,7 +19,7 @@ of a set of modules which are accessible from consuming applications as sub-pack
 
 etc. These library packages are located at [./src/lib](./src/lib)
 
-When built with `yarn build`, the output will be located in the `./package` sub directory. This is also the root of the published npm package.
+When built with `npm run build`, the output will be located in the `./package` sub directory. This is also the root of the published npm package.
 
 ### Application
 
@@ -27,11 +27,11 @@ In addition to the library, there is also a full application located at [./src/a
 
 ## Localization
 
-Localization of UI strings is handled by [ngx-translate](http://www.ngx-translate.com/). The translation strings should use the [ICU MessageFormat](http://userguide.icu-project.org/formatparse/messages).
+Localization of UI strings is handled by [ngx-translate](https://ngx-translate.org). The translation strings should use the [ICU MessageFormat](https://unicode-org.github.io/icu/userguide/format_parse/messages).
 
 Translation keys are automatically extracted by running:
 ```
-yarn extract-translations
+npm run extract-translations
 ```
 This scan the source files for any translation keys, and add them to each of the translation files located in [`./src/lib/static/i18n-messages/`](./src/lib/static/i18n-messages/).
 
@@ -44,6 +44,7 @@ de: 592 of 650 tokens translated (91%)
 
 This report data is also saved to the [i18n-coverage.json](./i18n-coverage.json) file.
 
-To add support for a new language, create a new empty json file (`{}`) in the `i18n-messages` directory named `<languageCode>.json`, where `languageCode` is one of the supported codes as given in the [LanguageCode enum type](../core/src/api/schema/common/language-code.graphql), then run `yarn extract-translations`
+To add support for a new language, create a new empty json file (`{}`) in the `i18n-messages` directory named `<languageCode>.json`, where `languageCode` is one of the supported codes as given in the [LanguageCode enum type](../core/src/api/schema/common/language-code.graphql), then run `npm run extract-translations`
 
+To verify localization changes add `<languageCode>.json` to `./src/lib/static/vendure-ui-config.json` in the array `availableLanguages`. This will make the localization available in Admin UI development mode using `npm run dev`
 

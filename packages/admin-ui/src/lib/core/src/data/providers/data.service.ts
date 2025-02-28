@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { MutationUpdaterFn, WatchQueryFetchPolicy } from '@apollo/client/core';
+import { TypedDocumentNode } from '@graphql-typed-document-node/core';
 import { DocumentNode } from 'graphql';
 import { Observable } from 'rxjs';
 
@@ -7,7 +8,7 @@ import { QueryResult } from '../query-result';
 
 import { AdministratorDataService } from './administrator-data.service';
 import { AuthDataService } from './auth-data.service';
-import { BaseDataService } from './base-data.service';
+import { BaseDataService, ExtendedQueryOptions } from './base-data.service';
 import { ClientDataService } from './client-data.service';
 import { CollectionDataService } from './collection-data.service';
 import { CustomerDataService } from './customer-data.service';
@@ -25,7 +26,7 @@ import { ShippingMethodDataService } from './shipping-method-data.service';
  * advisable to always select the `id` field of any entity, which will allow the returned data
  * to be effectively cached.
  *
- * @docsCategory providers
+ * @docsCategory services
  * @docsPage DataService
  * @docsWeight 0
  */
@@ -64,7 +65,7 @@ export class DataService {
      * they type of result returned, e.g. stream of values, single value etc.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * const result$ = this.dataService.query(gql`
      *   query MyQuery($id: ID!) {
      *     product(id: $id) {
@@ -77,12 +78,13 @@ export class DataService {
      * ).mapSingle(data => data.product);
      * ```
      */
-    query<T, V = Record<string, any>>(
-        query: DocumentNode,
+    query<T, V extends Record<string, any> = Record<string, any>>(
+        query: DocumentNode | TypedDocumentNode<T, V>,
         variables?: V,
         fetchPolicy: WatchQueryFetchPolicy = 'cache-and-network',
+        options: ExtendedQueryOptions = {},
     ): QueryResult<T, V> {
-        return this.baseDataService.query(query, variables, fetchPolicy);
+        return this.baseDataService.query(query, variables, fetchPolicy, options);
     }
 
     /**
@@ -90,23 +92,24 @@ export class DataService {
      * Perform a GraphQL mutation.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * const result$ = this.dataService.mutate(gql`
-     *   mutation MyMutation($input: UpdateEntityInput!) {
+     *   mutation MyMutation($Codegen.UpdateEntityInput!) {
      *     updateEntity(input: $input) {
      *       id
      *       name
      *     }
      *   },
-     *   { input: updateEntityInput },
+     *   { Codegen.updateEntityInput },
      * );
      * ```
      */
-    mutate<T, V = Record<string, any>>(
-        mutation: DocumentNode,
+    mutate<T, V extends Record<string, any> = Record<string, any>>(
+        mutation: DocumentNode | TypedDocumentNode<T, V>,
         variables?: V,
         update?: MutationUpdaterFn<T>,
+        options: ExtendedQueryOptions = {},
     ): Observable<T> {
-        return this.baseDataService.mutate(mutation, variables, update);
+        return this.baseDataService.mutate(mutation, variables, update, options);
     }
 }

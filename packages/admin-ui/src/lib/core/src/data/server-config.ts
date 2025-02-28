@@ -1,13 +1,13 @@
 import { Injectable, Injector } from '@angular/core';
+import { lastValueFrom } from 'rxjs';
 
 import {
     CustomFieldConfig,
     CustomFields,
-    GetGlobalSettings,
-    GetServerConfig,
+    GetGlobalSettingsQuery,
+    GetServerConfigQuery,
     OrderProcessState,
     PermissionDefinition,
-    ServerConfig,
 } from '../common/generated-types';
 
 import { GET_GLOBAL_SETTINGS, GET_SERVER_CONFIG } from './definitions/settings-definitions';
@@ -23,8 +23,8 @@ export function initializeServerConfigService(serverConfigService: ServerConfigS
  */
 @Injectable()
 export class ServerConfigService {
-    private _serverConfig: ServerConfig = {} as any;
-
+    private _serverConfig: GetServerConfigQuery['globalSettings']['serverConfig'] = {} as any;
+    customFieldsMap: Map<string, CustomFieldConfig[]> = new Map();
     private get baseDataService() {
         return this.injector.get<BaseDataService>(BaseDataService);
     }
@@ -43,22 +43,24 @@ export class ServerConfigService {
      * Fetch the ServerConfig. Should be run on app init (in case user is already logged in) and on successful login.
      */
     getServerConfig() {
-        return this.baseDataService
-            .query<GetServerConfig.Query>(GET_SERVER_CONFIG)
-            .single$.toPromise()
-            .then(
-                result => {
-                    this._serverConfig = result.globalSettings.serverConfig;
-                },
-                err => {
-                    // Let the error fall through to be caught by the http interceptor.
-                },
-            );
+        return lastValueFrom(
+            this.baseDataService.query<GetServerConfigQuery>(GET_SERVER_CONFIG).single$,
+        ).then(
+            result => {
+                this._serverConfig = result.globalSettings.serverConfig;
+                for (const entityCustomFields of this._serverConfig.entityCustomFields) {
+                    this.customFieldsMap.set(entityCustomFields.entityName, entityCustomFields.customFields);
+                }
+            },
+            err => {
+                // Let the error fall through to be caught by the http interceptor.
+            },
+        );
     }
 
     getAvailableLanguages() {
         return this.baseDataService
-            .query<GetGlobalSettings.Query>(GET_GLOBAL_SETTINGS, {}, 'cache-first')
+            .query<GetGlobalSettingsQuery>(GET_GLOBAL_SETTINGS, {}, 'cache-first')
             .mapSingle(res => res.globalSettings.availableLanguages);
     }
 
@@ -66,15 +68,15 @@ export class ServerConfigService {
      * When any of the GlobalSettings are modified, this method should be called to update the Apollo cache.
      */
     refreshGlobalSettings() {
-        return this.baseDataService.query<GetGlobalSettings.Query>(GET_GLOBAL_SETTINGS, {}, 'network-only')
+        return this.baseDataService.query<GetGlobalSettingsQuery>(GET_GLOBAL_SETTINGS, {}, 'network-only')
             .single$;
     }
 
     /**
      * Retrieves the custom field configs for the given entity type.
      */
-    getCustomFieldsFor(type: Exclude<keyof CustomFields, '__typename'>): CustomFieldConfig[] {
-        return this.serverConfig.customFieldConfig[type] || [];
+    getCustomFieldsFor(type: Exclude<keyof CustomFields, '__typename'> | string): CustomFieldConfig[] {
+        return this.customFieldsMap.get(type) || [];
     }
 
     getOrderProcessStates(): OrderProcessState[] {
@@ -89,7 +91,7 @@ export class ServerConfigService {
         return this.serverConfig.permissions;
     }
 
-    get serverConfig(): ServerConfig {
+    get serverConfig(): GetServerConfigQuery['globalSettings']['serverConfig'] {
         return this._serverConfig;
     }
 }

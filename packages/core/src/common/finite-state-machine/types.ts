@@ -6,7 +6,7 @@ import { Observable } from 'rxjs';
  * on {@link FSM}.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * type LightColor = 'Green' | 'Amber' | 'Red';
  *
  * const trafficLightTransitions: Transitions<LightColor> = {
@@ -23,7 +23,7 @@ import { Observable } from 'rxjs';
  * ```
  *
  * The `mergeStrategy` property defines how to handle the merging of states when one set of
- * transitions is being merged with another (as in the case of defining a {@link CustomerOrderProcess})
+ * transitions is being merged with another (as in the case of defining a {@link OrderProcess})
  *
  * @docsCategory StateMachine
  */

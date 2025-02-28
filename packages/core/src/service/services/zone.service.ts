@@ -7,20 +7,23 @@ import {
     MutationRemoveMembersFromZoneArgs,
     UpdateZoneInput,
 } from '@vendure/common/lib/generated-types';
-import { ID } from '@vendure/common/lib/shared-types';
+import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
+import { In } from 'typeorm';
 
 import { RequestContext } from '../../api/common/request-context';
 import { createSelfRefreshingCache, SelfRefreshingCache } from '../../common/self-refreshing-cache';
+import { ListQueryOptions } from '../../common/types/common-types';
 import { assertFound } from '../../common/utils';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { Channel, TaxRate } from '../../entity';
-import { Country } from '../../entity/country/country.entity';
+import { Country } from '../../entity/region/country.entity';
 import { Zone } from '../../entity/zone/zone.entity';
 import { EventBus } from '../../event-bus';
 import { ZoneEvent } from '../../event-bus/events/zone-event';
 import { ZoneMembersEvent } from '../../event-bus/events/zone-members-event';
+import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-builder';
 import { TranslatorService } from '../helpers/translator/translator.service';
 import { patchEntity } from '../helpers/utils/patch-entity';
 
@@ -41,6 +44,7 @@ export class ZoneService {
         private configService: ConfigService,
         private eventBus: EventBus,
         private translator: TranslatorService,
+        private listQueryBuilder: ListQueryBuilder,
     ) {}
 
     /** @internal */
@@ -67,20 +71,28 @@ export class ZoneService {
         });
     }
 
-    async findAll(ctx: RequestContext): Promise<Zone[]> {
-        return this.zones.memoize([], [ctx], (zones) => {
-            return zones.map((zone, i) => {
-                const cloneZone = { ...zone };
-                cloneZone.members = zone.members.map(country => this.translator.translate(country, ctx));
-                return cloneZone;
+    async findAll(ctx: RequestContext, options?: ListQueryOptions<Zone>): Promise<PaginatedList<Zone>> {
+        return this.listQueryBuilder
+            .build(Zone, options, { relations: ['members'], ctx })
+            .getManyAndCount()
+            .then(([items, totalItems]) => {
+                const translated = items.map((zone, i) => {
+                    const cloneZone = { ...zone };
+                    cloneZone.members = zone.members.map(country => this.translator.translate(country, ctx));
+                    return cloneZone;
+                });
+                return {
+                    items: translated,
+                    totalItems,
+                };
             });
-        });
     }
 
     findOne(ctx: RequestContext, zoneId: ID): Promise<Zone | undefined> {
         return this.connection
             .getRepository(ctx, Zone)
-            .findOne(zoneId, {
+            .findOne({
+                where: { id: zoneId },
                 relations: ['members'],
             })
             .then(zone => {
@@ -91,6 +103,16 @@ export class ZoneService {
             });
     }
 
+    async getAllWithMembers(ctx: RequestContext): Promise<Zone[]> {
+        return this.zones.memoize([], [ctx], zones => {
+            return zones.map((zone, i) => {
+                const cloneZone = { ...zone };
+                cloneZone.members = zone.members.map(country => this.translator.translate(country, ctx));
+                return cloneZone;
+            });
+        });
+    }
+
     async create(ctx: RequestContext, input: CreateZoneInput): Promise<Zone> {
         const zone = new Zone(input);
         if (input.memberIds) {
@@ -98,7 +120,7 @@ export class ZoneService {
         }
         const newZone = await this.connection.getRepository(ctx, Zone).save(zone);
         await this.zones.refresh(ctx);
-        this.eventBus.publish(new ZoneEvent(ctx, newZone, 'created', input));
+        await this.eventBus.publish(new ZoneEvent(ctx, newZone, 'created', input));
         return assertFound(this.findOne(ctx, newZone.id));
     }
 
@@ -107,13 +129,13 @@ export class ZoneService {
         const updatedZone = patchEntity(zone, input);
         await this.connection.getRepository(ctx, Zone).save(updatedZone, { reload: false });
         await this.zones.refresh(ctx);
-        this.eventBus.publish(new ZoneEvent(ctx, zone, 'updated', input));
+        await this.eventBus.publish(new ZoneEvent(ctx, zone, 'updated', input));
         return assertFound(this.findOne(ctx, zone.id));
     }
 
     async delete(ctx: RequestContext, id: ID): Promise<DeletionResponse> {
         const zone = await this.connection.getEntityOrThrow(ctx, Zone, id);
-
+        const deletedZone = new Zone(zone);
         const channelsUsingZone = await this.connection
             .getRepository(ctx, Channel)
             .createQueryBuilder('channel')
@@ -146,7 +168,7 @@ export class ZoneService {
         } else {
             await this.connection.getRepository(ctx, Zone).remove(zone);
             await this.zones.refresh(ctx);
-            this.eventBus.publish(new ZoneEvent(ctx, zone, 'deleted', id));
+            await this.eventBus.publish(new ZoneEvent(ctx, deletedZone, 'deleted', id));
             return {
                 result: DeletionResult.DELETED,
                 message: '',
@@ -166,7 +188,7 @@ export class ZoneService {
         zone.members = members;
         await this.connection.getRepository(ctx, Zone).save(zone, { reload: false });
         await this.zones.refresh(ctx);
-        this.eventBus.publish(new ZoneMembersEvent(ctx, zone, 'assigned', memberIds));
+        await this.eventBus.publish(new ZoneMembersEvent(ctx, zone, 'assigned', memberIds));
         return assertFound(this.findOne(ctx, zone.id));
     }
 
@@ -180,12 +202,12 @@ export class ZoneService {
         zone.members = zone.members.filter(country => !memberIds.includes(country.id));
         await this.connection.getRepository(ctx, Zone).save(zone, { reload: false });
         await this.zones.refresh(ctx);
-        this.eventBus.publish(new ZoneMembersEvent(ctx, zone, 'removed', memberIds));
+        await this.eventBus.publish(new ZoneMembersEvent(ctx, zone, 'removed', memberIds));
         return assertFound(this.findOne(ctx, zone.id));
     }
 
     private getCountriesFromIds(ctx: RequestContext, ids: ID[]): Promise<Country[]> {
-        return this.connection.getRepository(ctx, Country).findByIds(ids);
+        return this.connection.getRepository(ctx, Country).find({ where: { id: In(ids) } });
     }
 
     /**

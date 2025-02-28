@@ -1,6 +1,10 @@
 import { AssetType } from '@vendure/common/lib/generated-types';
 import { ID } from '@vendure/common/lib/shared-types';
-import { Observable, Observer } from 'rxjs';
+import { lastValueFrom, Observable, Observer } from 'rxjs';
+import { FindOptionsRelations } from 'typeorm/find-options/FindOptionsRelations';
+
+import { RelationPaths } from '../api/decorators/relations.decorator';
+import { VendureEntity } from '../entity/base/base.entity';
 
 /**
  * Takes a predicate function and returns a negated version.
@@ -23,7 +27,7 @@ export function foundIn<T>(set: T[], compareBy: keyof T) {
  * Used when performing a "find" operation on an entity which we are sure exists, as in the case that we
  * just successfully created or updated it.
  */
-export function assertFound<T>(promise: Promise<T | undefined>): Promise<T> {
+export function assertFound<T>(promise: Promise<T | undefined | null>): Promise<T> {
     return promise as Promise<T>;
 }
 
@@ -31,8 +35,8 @@ export function assertFound<T>(promise: Promise<T | undefined>): Promise<T> {
  * Compare ID values for equality, taking into account the fact that they may not be of matching types
  * (string or number).
  */
-export function idsAreEqual(id1?: ID, id2?: ID): boolean {
-    if (id1 === undefined || id2 === undefined) {
+export function idsAreEqual(id1?: ID | null, id2?: ID | null): boolean {
+    if (id1 == null || id2 == null) {
         return false;
     }
     return id1.toString() === id2.toString();
@@ -61,7 +65,23 @@ export function getAssetType(mimeType: string): AssetType {
  * upper/lower case. See more discussion here: https://ux.stackexchange.com/a/16849
  */
 export function normalizeEmailAddress(input: string): string {
-    return input.trim().toLowerCase();
+    return isEmailAddressLike(input) ? input.trim().toLowerCase() : input.trim();
+}
+
+/**
+ * This is a "good enough" check for whether the input is an email address.
+ * From https://stackoverflow.com/a/32686261
+ * It is used to determine whether to apply normalization (lower-casing)
+ * when comparing identifiers in user lookups. This allows case-sensitive
+ * identifiers for other authentication methods.
+ */
+export function isEmailAddressLike(input: string): boolean {
+    if (input.length > 1000) {
+        // This limit is in place to prevent abuse via a polynomial-time regex attack
+        // See https://github.com/vendure-ecommerce/vendure/security/code-scanning/43
+        throw new Error('Input too long');
+    }
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.trim());
 }
 
 /**
@@ -71,7 +91,7 @@ export function normalizeEmailAddress(input: string): string {
 export async function awaitPromiseOrObservable<T>(value: T | Promise<T> | Observable<T>): Promise<T> {
     let result = await value;
     if (result instanceof Observable) {
-        result = await result.toPromise();
+        result = await lastValueFrom(result);
     }
     return result;
 }
@@ -83,7 +103,7 @@ export async function awaitPromiseOrObservable<T>(value: T | Promise<T> | Observ
  * an Observable but also want to work with async (Promise-returning) code.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * \@Controller()
  * export class MyWorkerController {
  *
@@ -99,16 +119,36 @@ export async function awaitPromiseOrObservable<T>(value: T | Promise<T> | Observ
  */
 export function asyncObservable<T>(work: (observer: Observer<T>) => Promise<T | void>): Observable<T> {
     return new Observable<T>(subscriber => {
-        (async () => {
+        void (async () => {
             try {
                 const result = await work(subscriber);
                 if (result) {
                     subscriber.next(result);
                 }
                 subscriber.complete();
-            } catch (e) {
+            } catch (e: any) {
                 subscriber.error(e);
             }
         })();
     });
+}
+
+export function convertRelationPaths<T extends VendureEntity>(
+    relationPaths?: RelationPaths<T> | null,
+): FindOptionsRelations<T> | undefined {
+    const result: FindOptionsRelations<T> = {};
+    if (relationPaths == null) {
+        return undefined;
+    }
+    for (const path of relationPaths) {
+        const parts = (path as string).split('.');
+        let current: any = result;
+        for (const [i, part] of Object.entries(parts)) {
+            if (!current[part]) {
+                current[part] = +i === parts.length - 1 ? true : {};
+            }
+            current = current[part];
+        }
+    }
+    return result;
 }

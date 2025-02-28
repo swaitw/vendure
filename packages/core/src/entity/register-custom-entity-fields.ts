@@ -1,58 +1,24 @@
+/* eslint-disable @typescript-eslint/ban-types */
 import { CustomFieldType } from '@vendure/common/lib/shared-types';
 import { assertNever } from '@vendure/common/lib/shared-utils';
 import {
     Column,
     ColumnOptions,
     ColumnType,
-    ConnectionOptions,
+    DataSourceOptions,
+    getMetadataArgsStorage,
     Index,
     JoinColumn,
     JoinTable,
     ManyToMany,
     ManyToOne,
 } from 'typeorm';
+import { EmbeddedMetadataArgs } from 'typeorm/metadata-args/EmbeddedMetadataArgs';
 import { DateUtils } from 'typeorm/util/DateUtils';
 
 import { CustomFieldConfig, CustomFields } from '../config/custom-field/custom-field-types';
 import { Logger } from '../config/logger/vendure-logger';
 import { VendureConfig } from '../config/vendure-config';
-
-import {
-    CustomAddressFields,
-    CustomAdministratorFields,
-    CustomAssetFields,
-    CustomChannelFields,
-    CustomCollectionFields,
-    CustomCollectionFieldsTranslation,
-    CustomCountryFields,
-    CustomCountryFieldsTranslation,
-    CustomCustomerFields,
-    CustomCustomerGroupFields,
-    CustomFacetFields,
-    CustomFacetFieldsTranslation,
-    CustomFacetValueFields,
-    CustomFacetValueFieldsTranslation,
-    CustomFulfillmentFields,
-    CustomGlobalSettingsFields,
-    CustomOrderFields,
-    CustomOrderLineFields,
-    CustomPaymentMethodFields,
-    CustomProductFields,
-    CustomProductFieldsTranslation,
-    CustomProductOptionFields,
-    CustomProductOptionFieldsTranslation,
-    CustomProductOptionGroupFields,
-    CustomProductOptionGroupFieldsTranslation,
-    CustomProductVariantFields,
-    CustomProductVariantFieldsTranslation,
-    CustomPromotionFields,
-    CustomShippingMethodFields,
-    CustomShippingMethodFieldsTranslation,
-    CustomTaxCategoryFields,
-    CustomTaxRateFields,
-    CustomUserFields,
-    CustomZoneFields,
-} from './custom-entity-fields';
 
 /**
  * The maximum length of the "length" argument of a MySQL varchar column.
@@ -65,7 +31,7 @@ const MAX_STRING_LENGTH = 65535;
 function registerCustomFieldsForEntity(
     config: VendureConfig,
     entityName: keyof CustomFields,
-    // tslint:disable-next-line:callable-types
+    // eslint-disable-next-line @typescript-eslint/prefer-function-type
     ctor: { new (): any },
     translation = false,
 ) {
@@ -78,15 +44,19 @@ function registerCustomFieldsForEntity(
             const registerColumn = () => {
                 if (customField.type === 'relation') {
                     if (customField.list) {
-                        ManyToMany(type => customField.entity, { eager: customField.eager })(instance, name);
+                        ManyToMany(type => customField.entity, customField.inverseSide, {
+                            eager: customField.eager,
+                        })(instance, name);
                         JoinTable()(instance, name);
                     } else {
-                        ManyToOne(type => customField.entity, { eager: customField.eager })(instance, name);
+                        ManyToOne(type => customField.entity, customField.inverseSide, {
+                            eager: customField.eager,
+                        })(instance, name);
                         JoinColumn()(instance, name);
                     }
                 } else {
                     const options: ColumnOptions = {
-                        type: list ? 'simple-json' : getColumnType(dbEngine, customField.type),
+                        type: getColumnType(dbEngine, customField.type, list ?? false),
                         default: getDefault(customField, dbEngine),
                         name,
                         nullable: nullable === false ? false : true,
@@ -96,7 +66,8 @@ function registerCustomFieldsForEntity(
                         const length = customField.length || 255;
                         if (MAX_STRING_LENGTH < length) {
                             throw new Error(
-                                `ERROR: The "length" property of the custom field "${customField.name}" is greater than the maximum allowed value of ${MAX_STRING_LENGTH}`,
+                                `ERROR: The "length" property of the custom field "${customField.name}" is ` +
+                                    `greater than the maximum allowed value of ${MAX_STRING_LENGTH}`,
                             );
                         }
                         options.length = length;
@@ -135,18 +106,18 @@ function registerCustomFieldsForEntity(
             };
 
             if (translation) {
-                if (customField.type === 'localeString') {
+                if (customField.type === 'localeString' || customField.type === 'localeText') {
                     registerColumn();
                 }
             } else {
-                if (customField.type !== 'localeString') {
+                if (customField.type !== 'localeString' && customField.type !== 'localeText') {
                     registerColumn();
                 }
             }
 
             const relationFieldsCount = customFields.filter(f => f.type === 'relation').length;
             const nonLocaleStringFieldsCount = customFields.filter(
-                f => f.type !== 'localeString' && f.type !== 'relation',
+                f => f.type !== 'localeString' && f.type !== 'localeText' && f.type !== 'relation',
             ).length;
 
             if (0 < relationFieldsCount && nonLocaleStringFieldsCount === 0) {
@@ -166,7 +137,7 @@ function registerCustomFieldsForEntity(
     }
 }
 
-function formatDefaultDatetime(dbEngine: ConnectionOptions['type'], datetime: any): Date | string {
+function formatDefaultDatetime(dbEngine: DataSourceOptions['type'], datetime: any): Date | string {
     if (!datetime) {
         return datetime;
     }
@@ -183,14 +154,19 @@ function formatDefaultDatetime(dbEngine: ConnectionOptions['type'], datetime: an
 }
 
 function getColumnType(
-    dbEngine: ConnectionOptions['type'],
+    dbEngine: DataSourceOptions['type'],
     type: Exclude<CustomFieldType, 'relation'>,
+    isList: boolean,
 ): ColumnType {
+    if (isList && type !== 'struct') {
+        return 'simple-json';
+    }
     switch (type) {
         case 'string':
         case 'localeString':
             return 'varchar';
         case 'text':
+        case 'localeText':
             switch (dbEngine) {
                 case 'mysql':
                 case 'mariadb':
@@ -223,13 +199,25 @@ function getColumnType(
                 default:
                     return 'datetime';
             }
+        case 'struct':
+            switch (dbEngine) {
+                case 'postgres':
+                    return 'jsonb';
+                case 'mysql':
+                case 'mariadb':
+                    return 'json';
+                case 'sqlite':
+                case 'sqljs':
+                default:
+                    return 'simple-json';
+            }
         default:
             assertNever(type);
     }
     return 'varchar';
 }
 
-function getDefault(customField: CustomFieldConfig, dbEngine: ConnectionOptions['type']) {
+function getDefault(customField: CustomFieldConfig, dbEngine: DataSourceOptions['type']) {
     const { name, type, list, defaultValue, nullable } = customField;
     if (list && defaultValue) {
         if (dbEngine === 'mysql') {
@@ -245,48 +233,72 @@ function getDefault(customField: CustomFieldConfig, dbEngine: ConnectionOptions[
     return type === 'datetime' ? formatDefaultDatetime(dbEngine, defaultValue) : defaultValue;
 }
 
+function assertLocaleFieldsNotSpecified(config: VendureConfig, entityName: keyof CustomFields) {
+    const customFields = config.customFields && config.customFields[entityName];
+    if (customFields) {
+        for (const customField of customFields) {
+            if (customField.type === 'localeString' || customField.type === 'localeText') {
+                Logger.error(
+                    `Custom field "${customField.name}" on entity "${entityName}" cannot be of type "localeString" or "localeText". ` +
+                        `This entity does not support localization.`,
+                );
+            }
+        }
+    }
+}
+
 /**
  * Dynamically registers any custom fields with TypeORM. This function should be run at the bootstrap
  * stage of the app lifecycle, before the AppModule is initialized.
  */
 export function registerCustomEntityFields(config: VendureConfig) {
-    registerCustomFieldsForEntity(config, 'Address', CustomAddressFields);
-    registerCustomFieldsForEntity(config, 'Administrator', CustomAdministratorFields);
-    registerCustomFieldsForEntity(config, 'Asset', CustomAssetFields);
-    registerCustomFieldsForEntity(config, 'Collection', CustomCollectionFields);
-    registerCustomFieldsForEntity(config, 'Collection', CustomCollectionFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'Channel', CustomChannelFields);
-    registerCustomFieldsForEntity(config, 'Country', CustomCountryFields);
-    registerCustomFieldsForEntity(config, 'Country', CustomCountryFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'Customer', CustomCustomerFields);
-    registerCustomFieldsForEntity(config, 'CustomerGroup', CustomCustomerGroupFields);
-    registerCustomFieldsForEntity(config, 'Facet', CustomFacetFields);
-    registerCustomFieldsForEntity(config, 'Facet', CustomFacetFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'FacetValue', CustomFacetValueFields);
-    registerCustomFieldsForEntity(config, 'FacetValue', CustomFacetValueFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'Fulfillment', CustomFulfillmentFields);
-    registerCustomFieldsForEntity(config, 'Order', CustomOrderFields);
-    registerCustomFieldsForEntity(config, 'OrderLine', CustomOrderLineFields);
-    registerCustomFieldsForEntity(config, 'PaymentMethod', CustomPaymentMethodFields);
-    registerCustomFieldsForEntity(config, 'Product', CustomProductFields);
-    registerCustomFieldsForEntity(config, 'Product', CustomProductFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'ProductOption', CustomProductOptionFields);
-    registerCustomFieldsForEntity(config, 'ProductOption', CustomProductOptionFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'ProductOptionGroup', CustomProductOptionGroupFields);
-    registerCustomFieldsForEntity(
-        config,
-        'ProductOptionGroup',
-        CustomProductOptionGroupFieldsTranslation,
-        true,
-    );
-    registerCustomFieldsForEntity(config, 'ProductVariant', CustomProductVariantFields);
-    registerCustomFieldsForEntity(config, 'ProductVariant', CustomProductVariantFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'Promotion', CustomPromotionFields);
-    registerCustomFieldsForEntity(config, 'TaxCategory', CustomTaxCategoryFields);
-    registerCustomFieldsForEntity(config, 'TaxRate', CustomTaxRateFields);
-    registerCustomFieldsForEntity(config, 'User', CustomUserFields);
-    registerCustomFieldsForEntity(config, 'GlobalSettings', CustomGlobalSettingsFields);
-    registerCustomFieldsForEntity(config, 'ShippingMethod', CustomShippingMethodFields);
-    registerCustomFieldsForEntity(config, 'ShippingMethod', CustomShippingMethodFieldsTranslation, true);
-    registerCustomFieldsForEntity(config, 'Zone', CustomZoneFields);
+    // In order to determine the classes used for the custom field embedded types, we need
+    // to introspect the metadata args storage.
+    const metadataArgsStorage = getMetadataArgsStorage();
+
+    for (const [entityName, customFieldsConfig] of Object.entries(config.customFields ?? {})) {
+        if (customFieldsConfig && customFieldsConfig.length) {
+            const customFieldsMetadata = getCustomFieldsMetadata(entityName);
+            const customFieldsClass = customFieldsMetadata.type();
+            if (customFieldsClass && typeof customFieldsClass !== 'string') {
+                registerCustomFieldsForEntity(config, entityName, customFieldsClass as any);
+            }
+            const translationsMetadata = metadataArgsStorage
+                .filterRelations(customFieldsMetadata.target)
+                .find(m => m.propertyName === 'translations');
+            if (translationsMetadata) {
+                // This entity is translatable, which means that we should
+                // also register any localized custom fields on the related
+                // EntityTranslation entity.
+                const translationType: Function = (translationsMetadata.type as Function)();
+                const customFieldsTranslationsMetadata = getCustomFieldsMetadata(translationType);
+                const customFieldsTranslationClass = customFieldsTranslationsMetadata.type();
+                if (customFieldsTranslationClass && typeof customFieldsTranslationClass !== 'string') {
+                    registerCustomFieldsForEntity(
+                        config,
+                        entityName,
+                        customFieldsTranslationClass as any,
+                        true,
+                    );
+                }
+            } else {
+                assertLocaleFieldsNotSpecified(config, entityName);
+            }
+        }
+    }
+
+    function getCustomFieldsMetadata(entity: Function | string): EmbeddedMetadataArgs {
+        const entityName = typeof entity === 'string' ? entity : entity.name;
+        const metadataArgs = metadataArgsStorage.embeddeds.find(item => {
+            if (item.propertyName === 'customFields') {
+                const targetName = typeof item.target === 'string' ? item.target : item.target.name;
+                return targetName === entityName;
+            }
+        });
+
+        if (!metadataArgs) {
+            throw new Error(`Could not find embedded CustomFields property on entity "${entityName}"`);
+        }
+        return metadataArgs;
+    }
 }

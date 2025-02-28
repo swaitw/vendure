@@ -9,14 +9,17 @@ import { JobQueueModule } from '../job-queue/job-queue.module';
 import { ActiveOrderService } from './helpers/active-order/active-order.service';
 import { ConfigArgService } from './helpers/config-arg/config-arg.service';
 import { CustomFieldRelationService } from './helpers/custom-field-relation/custom-field-relation.service';
+import { EntityDuplicatorService } from './helpers/entity-duplicator/entity-duplicator.service';
 import { EntityHydrator } from './helpers/entity-hydrator/entity-hydrator.service';
 import { ExternalAuthenticationService } from './helpers/external-authentication/external-authentication.service';
+import { FacetValueChecker } from './helpers/facet-value-checker/facet-value-checker';
 import { FulfillmentStateMachine } from './helpers/fulfillment-state-machine/fulfillment-state-machine';
 import { ListQueryBuilder } from './helpers/list-query-builder/list-query-builder';
 import { LocaleStringHydrator } from './helpers/locale-string-hydrator/locale-string-hydrator';
 import { OrderCalculator } from './helpers/order-calculator/order-calculator';
 import { OrderMerger } from './helpers/order-merger/order-merger';
 import { OrderModifier } from './helpers/order-modifier/order-modifier';
+import { OrderSplitter } from './helpers/order-splitter/order-splitter';
 import { OrderStateMachine } from './helpers/order-state-machine/order-state-machine';
 import { PasswordCipher } from './helpers/password-cipher/password-cipher';
 import { PaymentStateMachine } from './helpers/payment-state-machine/payment-state-machine';
@@ -53,15 +56,17 @@ import { ProductService } from './services/product.service';
 import { PromotionService } from './services/promotion.service';
 import { RoleService } from './services/role.service';
 import { SearchService } from './services/search.service';
+import { SellerService } from './services/seller.service';
 import { SessionService } from './services/session.service';
 import { ShippingMethodService } from './services/shipping-method.service';
+import { StockLevelService } from './services/stock-level.service';
+import { StockLocationService } from './services/stock-location.service';
 import { StockMovementService } from './services/stock-movement.service';
 import { TagService } from './services/tag.service';
 import { TaxCategoryService } from './services/tax-category.service';
 import { TaxRateService } from './services/tax-rate.service';
 import { UserService } from './services/user.service';
 import { ZoneService } from './services/zone.service';
-
 
 const services = [
     AdministratorService,
@@ -88,8 +93,11 @@ const services = [
     PromotionService,
     RoleService,
     SearchService,
+    SellerService,
     SessionService,
     ShippingMethodService,
+    StockLevelService,
+    StockLocationService,
     StockMovementService,
     TagService,
     TaxCategoryService,
@@ -106,6 +114,7 @@ const helpers = [
     FulfillmentStateMachine,
     OrderMerger,
     OrderModifier,
+    OrderSplitter,
     PaymentStateMachine,
     ListQueryBuilder,
     ShippingCalculator,
@@ -120,7 +129,9 @@ const helpers = [
     ProductPriceApplicator,
     EntityHydrator,
     RequestContextService,
-    TranslatorService
+    TranslatorService,
+    EntityDuplicatorService,
+    FacetValueChecker,
 ];
 
 /**

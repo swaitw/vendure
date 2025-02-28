@@ -17,6 +17,7 @@ import {
 } from '../../config/auth/native-authentication-strategy';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
+import { ExternalAuthenticationMethod } from '../../entity/authentication-method/external-authentication-method.entity';
 import { AuthenticatedSession } from '../../entity/session/authenticated-session.entity';
 import { User } from '../../entity/user/user.entity';
 import { EventBus } from '../../event-bus/event-bus';
@@ -51,7 +52,7 @@ export class AuthService {
         authenticationMethod: string,
         authenticationData: any,
     ): Promise<AuthenticatedSession | InvalidCredentialsError | NotVerifiedError> {
-        this.eventBus.publish(
+        await this.eventBus.publish(
             new AttemptedLoginEvent(
                 ctx,
                 authenticationMethod,
@@ -63,10 +64,10 @@ export class AuthService {
         const authenticationStrategy = this.getAuthenticationStrategy(apiType, authenticationMethod);
         const authenticateResult = await authenticationStrategy.authenticate(ctx, authenticationData);
         if (typeof authenticateResult === 'string') {
-            return new InvalidCredentialsError(authenticateResult);
+            return new InvalidCredentialsError({ authenticationError: authenticateResult });
         }
         if (!authenticateResult) {
-            return new InvalidCredentialsError('');
+            return new InvalidCredentialsError({ authenticationError: '' });
         }
         return this.createAuthenticatedSessionForUser(ctx, authenticateResult, authenticationStrategy.name);
     }
@@ -87,7 +88,10 @@ export class AuthService {
             user.roles = userWithRoles?.roles || [];
         }
 
-        if (this.configService.authOptions.requireVerification && !user.verified) {
+        const extAuths = (user.authenticationMethods ?? []).filter(
+            am => am instanceof ExternalAuthenticationMethod,
+        );
+        if (!extAuths.length && this.configService.authOptions.requireVerification && !user.verified) {
             return new NotVerifiedError();
         }
         if (ctx.session && ctx.session.activeOrderId) {
@@ -100,7 +104,7 @@ export class AuthService {
             user,
             authenticationStrategyName,
         );
-        this.eventBus.publish(new LoginEvent(ctx, user));
+        await this.eventBus.publish(new LoginEvent(ctx, user));
         return session;
     }
 
@@ -120,7 +124,7 @@ export class AuthService {
         );
         const passwordMatches = await nativeAuthenticationStrategy.verifyUserPassword(ctx, userId, password);
         if (!passwordMatches) {
-            return new InvalidCredentialsError('');
+            return new InvalidCredentialsError({ authenticationError: '' });
         }
         return true;
     }
@@ -143,7 +147,7 @@ export class AuthService {
             if (typeof authenticationStrategy.onLogOut === 'function') {
                 await authenticationStrategy.onLogOut(ctx, session.user);
             }
-            this.eventBus.publish(new LogoutEvent(ctx));
+            await this.eventBus.publish(new LogoutEvent(ctx));
             return this.sessionService.deleteSessionsByUser(ctx, session.user);
         }
     }

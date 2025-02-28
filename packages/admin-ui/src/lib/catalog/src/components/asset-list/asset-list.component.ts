@@ -1,5 +1,4 @@
 import { Component, OnInit } from '@angular/core';
-import { FormControl } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import {
@@ -7,7 +6,9 @@ import {
     BaseListComponent,
     DataService,
     DeletionResult,
-    GetAssetList,
+    GetAssetListQuery,
+    GetAssetListQueryVariables,
+    ItemOf,
     LogicalOperator,
     ModalService,
     NotificationService,
@@ -24,8 +25,13 @@ import { debounceTime, finalize, map, switchMap, takeUntil } from 'rxjs/operator
     styleUrls: ['./asset-list.component.scss'],
 })
 export class AssetListComponent
-    extends BaseListComponent<GetAssetList.Query, GetAssetList.Items, GetAssetList.Variables>
-    implements OnInit {
+    extends BaseListComponent<
+        GetAssetListQuery,
+        ItemOf<GetAssetListQuery, 'assets'>,
+        GetAssetListQueryVariables
+    >
+    implements OnInit
+{
     searchTerm$ = new BehaviorSubject<string | undefined>(undefined);
     filterByTags$ = new BehaviorSubject<TagFragment[] | undefined>(undefined);
     uploading = false;
@@ -41,7 +47,7 @@ export class AssetListComponent
     ) {
         super(router, route);
         super.setQueryFn(
-            (...args: any[]) => this.dataService.product.getAssetList(...args),
+            (...args: any[]) => this.dataService.product.getAssetList(...args).refetchOnChannelChange(),
             data => data.assets,
             (skip, take) => {
                 const searchTerm = this.searchTerm$.value;
